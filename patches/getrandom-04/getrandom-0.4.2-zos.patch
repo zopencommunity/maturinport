@@ -1,0 +1,40 @@
+diff -ruN '--exclude=.cargo-checksum.json' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/Cargo.toml /tmp/getrandom-04-maturin-zos/Cargo.toml
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/Cargo.toml	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/getrandom-04-maturin-zos/Cargo.toml	2026-08-15 00:12:45.641751372 -0400
+@@ -115,7 +115,7 @@
+ version = "0.2.154"
+ default-features = false
+ 
+-[target.'cfg(any(target_os = "haiku", target_os = "redox", target_os = "nto", target_os = "aix"))'.dependencies.libc]
++[target.'cfg(any(target_os = "haiku", target_os = "redox", target_os = "nto", target_os = "aix", target_os = "zos"))'.dependencies.libc]
+ version = "0.2.154"
+ default-features = false
+ 
+diff -ruN '--exclude=.cargo-checksum.json' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/src/backends.rs /tmp/getrandom-04-maturin-zos/src/backends.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/src/backends.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/getrandom-04-maturin-zos/src/backends.rs	2026-08-14 23:46:09.972318080 -0400
+@@ -46,6 +46,7 @@
+         target_os = "redox",
+         target_os = "nto",
+         target_os = "aix",
++        target_os = "zos",
+     ))] {
+         mod use_file;
+         pub use use_file::*;
+diff -ruN '--exclude=.cargo-checksum.json' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/src/utils/get_errno.rs /tmp/getrandom-04-maturin-zos/src/utils/get_errno.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/getrandom-0.4.2/src/utils/get_errno.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/getrandom-04-maturin-zos/src/utils/get_errno.rs	2026-08-14 23:46:24.202419651 -0400
+@@ -19,6 +19,13 @@
+         use __errno as errno_location;
+     } else if #[cfg(target_os = "aix")] {
+         use libc::_Errno as errno_location;
++    } else if #[cfg(target_os = "zos")] {
++        #[link(name = "c")]
++        unsafe extern "C" {
++            #[cfg_attr(target_os = "zos", link_name = "__errno")]
++            fn __errno() -> *mut libc::c_int;
++        }
++        use __errno as errno_location;
+     } else {
+         compile_error!("errno_location is not provided for the target");
+     }

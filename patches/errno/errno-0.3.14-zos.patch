@@ -1,0 +1,11 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs /tmp/errno-maturin-zos/src/unix.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/errno-0.3.14/src/unix.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/errno-maturin-zos/src/unix.rs	2026-08-14 23:41:09.960176667 -0400
+@@ -79,6 +79,7 @@
+             target_os = "espidf",
+             target_os = "vxworks",
+             target_os = "cygwin",
++            target_os = "zos",
+             target_env = "newlib"
+         ),
+         link_name = "__errno"

@@ -1,0 +1,89 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lddtree-0.5.1/src/lib.rs /tmp/lddtree-maturin-zos/src/lib.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lddtree-0.5.1/src/lib.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/lddtree-maturin-zos/src/lib.rs	2026-08-15 00:38:58.596729303 -0400
+@@ -354,10 +354,10 @@
+ 
+     fn load_elf_paths(&mut self, _dylib_path: &Path) -> Result<(), Error> {
+         #[cfg(unix)]
+-        if let Ok(env_ld_path) = env::var("LD_LIBRARY_PATH")
+-            && self.root == Path::new("/")
+-        {
+-            self.env_ld_paths = self.parse_ld_paths(&env_ld_path, _dylib_path)?;
++        if let Ok(env_ld_path) = env::var("LD_LIBRARY_PATH") {
++            if self.root == Path::new("/") {
++                self.env_ld_paths = self.parse_ld_paths(&env_ld_path, _dylib_path)?;
++            }
+         }
+         // Load all the paths from a ldso config file
+         match find_musl_libc() {
+@@ -680,12 +680,12 @@
+             // @executable_path/..., @loader_path/..., or absolute path.
+             // For absolute paths, also probe through the sysroot so that a custom
+             // root (e.g., cross-compilation SDK) is searched instead of / on the host.
+-            if resolved.is_absolute()
+-                && let Ok(relative) = resolved.strip_prefix("/")
+-            {
+-                let sysroot_path = self.root.join(relative);
+-                if sysroot_path != resolved {
+-                    candidates.push(sysroot_path);
++            if resolved.is_absolute() {
++                if let Ok(relative) = resolved.strip_prefix("/") {
++                    let sysroot_path = self.root.join(relative);
++                    if sysroot_path != resolved {
++                        candidates.push(sysroot_path);
++                    }
+                 }
+             }
+             candidates.push(resolved);
+@@ -725,10 +725,10 @@
+             .map(|s| Path::new(s.as_str()).to_path_buf())
+             .chain(self.additional_ld_paths.iter().cloned());
+         for dir in search_dirs {
+-            if let Some(lib_path) = find_file_case_insensitive(&dir, lib_name)
+-                && let Some(lib) = self.try_single_candidate(dylib, lib_name, &lib_path)?
+-            {
+-                return Ok(lib);
++            if let Some(lib_path) = find_file_case_insensitive(&dir, lib_name) {
++                if let Some(lib) = self.try_single_candidate(dylib, lib_name, &lib_path)? {
++                    return Ok(lib);
++                }
+             }
+         }
+         Ok(not_found_library(lib_name))
+@@ -909,12 +909,12 @@
+         Err(_) => return None,
+     };
+     for entry in entries.flatten() {
+-        if let Some(file_name) = entry.file_name().to_str()
+-            && file_name.to_lowercase() == name_lower
+-        {
+-            let path = entry.path();
+-            if path.is_file() {
+-                return Some(path);
++        if let Some(file_name) = entry.file_name().to_str() {
++            if file_name.to_lowercase() == name_lower {
++                let path = entry.path();
++                if path.is_file() {
++                    return Some(path);
++                }
+             }
+         }
+     }
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lddtree-0.5.1/src/macho.rs /tmp/lddtree-maturin-zos/src/macho.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/lddtree-0.5.1/src/macho.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/lddtree-maturin-zos/src/macho.rs	2026-08-15 00:39:12.553984512 -0400
+@@ -30,10 +30,10 @@
+             Object::Mach(mach) => match mach {
+                 Mach::Fat(fat) => {
+                     for macho in fat {
+-                        if let Ok(goblin::mach::SingleArch::MachO(macho)) = macho
+-                            && self.compatible(&Object::Mach(Mach::Binary(macho)))
+-                        {
+-                            return true;
++                        if let Ok(goblin::mach::SingleArch::MachO(macho)) = macho {
++                            if self.compatible(&Object::Mach(Mach::Binary(macho))) {
++                                return true;
++                            }
+                         }
+                     }
+                     false

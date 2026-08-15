@@ -1,0 +1,45 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.3/src/archive_writer.rs /tmp/ar_archive_writer-maturin-zos/src/archive_writer.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.3/src/archive_writer.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/ar_archive_writer-maturin-zos/src/archive_writer.rs	2026-08-14 23:53:42.791740394 -0400
+@@ -164,7 +164,7 @@
+     if !name.is_empty() {
+         write!(w, "{name}")?;
+ 
+-        if !name.len().is_multiple_of(2) {
++        if name.len() % 2 != 0 {
+             write!(w, "\0")?;
+         }
+     }
+@@ -593,10 +593,10 @@
+ 
+                 // If EC is enabled, then the import descriptors are NOT put into EC
+                 // objects so we need to copy them to the EC map manually.
+-                if let Some(ec_map) = &mut ec_map
+-                    && is_import_descriptor(name)
+-                {
+-                    ec_map.insert(name.to_vec().into_boxed_slice(), index);
++                if let Some(ec_map) = &mut ec_map {
++                    if is_import_descriptor(name) {
++                        ec_map.insert(name.to_vec().into_boxed_slice(), index);
++                    }
+                 }
+             }
+         } else {
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.3/src/coff_import_file.rs /tmp/ar_archive_writer-maturin-zos/src/coff_import_file.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/ar_archive_writer-0.5.3/src/coff_import_file.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/ar_archive_writer-maturin-zos/src/coff_import_file.rs	2026-08-14 23:53:42.792045624 -0400
+@@ -138,10 +138,10 @@
+ 
+ fn apply_name_type(import_type: ImportNameType, name: &str) -> &str {
+     fn ltrim1<'a>(name: &'a str, chars: &str) -> &'a str {
+-        if let Some((first_char, rest)) = name.split_at_checked(1)
+-            && chars.contains(first_char)
+-        {
+-            return rest;
++        if let Some((first_char, rest)) = name.split_at_checked(1) {
++            if chars.contains(first_char) {
++                return rest;
++            }
+         }
+         name
+     }

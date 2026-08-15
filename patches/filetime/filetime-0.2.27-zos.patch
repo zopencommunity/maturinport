@@ -1,0 +1,390 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/mod.rs /tmp/filetime-maturin-zos/src/unix/mod.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/mod.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/filetime-maturin-zos/src/unix/mod.rs	2026-08-14 23:57:01.624050682 -0400
+@@ -85,7 +85,7 @@
+ }
+ 
+ pub fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
+-    #[cfg(target_os = "bitrig")]
++    #[cfg(target_os = "none")]
+     {
+         use std::os::bitrig::fs::MetadataExt;
+         Some(FileTime {
+@@ -94,7 +94,7 @@
+         })
+     }
+ 
+-    #[cfg(not(target_os = "bitrig"))]
++    #[cfg(not(target_os = "none"))]
+     {
+         meta.created().map(|i| i.into()).ok()
+     }
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/android.rs /tmp/filetime-maturin-zos/src/unix/unix/android.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/android.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/android.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,31 @@
++use crate::FileTime;
++use std::ffi::CString;
++use std::io;
++use std::os::unix::prelude::*;
++use std::path::Path;
++
++pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
++    set_times(p, Some(atime), Some(mtime), true)
++}
++
++fn set_times(
++    p: &Path,
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    symlink: bool,
++) -> io::Result<()> {
++    let flags = if symlink {
++        libc::AT_SYMLINK_NOFOLLOW
++    } else {
++        0
++    };
++
++    let p = CString::new(p.as_os_str().as_bytes())?;
++    let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
++    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
++    if rc == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/linux.rs /tmp/filetime-maturin-zos/src/unix/unix/linux.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/linux.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/linux.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,47 @@
++//! On Linux we try to use the more accurate `utimensat` syscall but this isn't
++//! always available so we also fall back to `utimes` if we couldn't find
++//! `utimensat` at runtime.
++
++use crate::FileTime;
++use std::ffi::CString;
++use std::io;
++use std::os::unix::prelude::*;
++use std::path::Path;
++use std::sync::atomic::AtomicBool;
++use std::sync::atomic::Ordering::SeqCst;
++
++pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
++    set_times(p, Some(atime), Some(mtime), true)
++}
++
++fn set_times(
++    p: &Path,
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    symlink: bool,
++) -> io::Result<()> {
++    let flags = if symlink {
++        libc::AT_SYMLINK_NOFOLLOW
++    } else {
++        0
++    };
++
++    // Same as the `if` statement above.
++    static INVALID: AtomicBool = AtomicBool::new(false);
++    if !INVALID.load(SeqCst) {
++        let p = CString::new(p.as_os_str().as_bytes())?;
++        let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
++        let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
++        if rc == 0 {
++            return Ok(());
++        }
++        let err = io::Error::last_os_error();
++        if err.raw_os_error() == Some(libc::ENOSYS) {
++            INVALID.store(true, SeqCst);
++        } else {
++            return Err(err);
++        }
++    }
++
++    super::utimes::set_times(p, atime, mtime, symlink)
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/macos.rs /tmp/filetime-maturin-zos/src/unix/unix/macos.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/macos.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/macos.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,68 @@
++//! Beginning with macOS 10.13, `utimensat` is supported by the OS, so here, we check if the symbol exists
++//! and if not, we fallback to `utimes`.
++
++use crate::FileTime;
++use libc::{c_char, c_int, timespec};
++use std::ffi::{CStr, CString};
++use std::os::unix::prelude::*;
++use std::path::Path;
++use std::sync::atomic::AtomicUsize;
++use std::sync::atomic::Ordering::SeqCst;
++use std::{io, mem};
++
++pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
++    set_times(p, Some(atime), Some(mtime), true)
++}
++
++fn set_times(
++    p: &Path,
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    symlink: bool,
++) -> io::Result<()> {
++    // Attempt to use the `utimensat` syscall, but if it's not supported by the
++    // current kernel then fall back to an older syscall.
++    if let Some(func) = utimensat() {
++        let flags = if symlink {
++            libc::AT_SYMLINK_NOFOLLOW
++        } else {
++            0
++        };
++
++        let p = CString::new(p.as_os_str().as_bytes())?;
++        let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
++        let rc = unsafe { func(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
++        if rc == 0 {
++            return Ok(());
++        } else {
++            return Err(io::Error::last_os_error());
++        }
++    }
++
++    super::utimes::set_times(p, atime, mtime, symlink)
++}
++
++fn utimensat() -> Option<unsafe extern "C" fn(c_int, *const c_char, *const timespec, c_int) -> c_int>
++{
++    static ADDR: AtomicUsize = AtomicUsize::new(0);
++    unsafe {
++        fetch(&ADDR, CStr::from_bytes_with_nul_unchecked(b"utimensat\0"))
++            .map(|sym| mem::transmute(sym))
++    }
++}
++
++fn fetch(cache: &AtomicUsize, name: &CStr) -> Option<usize> {
++    match cache.load(SeqCst) {
++        0 => {}
++        1 => return None,
++        n => return Some(n),
++    }
++    let sym = unsafe { libc::dlsym(libc::RTLD_DEFAULT, name.as_ptr() as *const _) };
++    let (val, ret) = if sym.is_null() {
++        (1, None)
++    } else {
++        (sym as usize, Some(sym as usize))
++    };
++    cache.store(val, SeqCst);
++    return ret;
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/mod.rs /tmp/filetime-maturin-zos/src/unix/unix/mod.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/mod.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/mod.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,73 @@
++use crate::FileTime;
++use libc::{time_t, timespec, UTIME_OMIT};
++use std::fs;
++use std::io;
++use std::os::unix::prelude::*;
++use std::path::Path;
++
++cfg_if::cfg_if! {
++    if #[cfg(target_os = "linux")] {
++        mod utimes;
++        mod linux;
++        pub use self::linux::*;
++    } else if #[cfg(target_os = "android")] {
++        mod android;
++        pub use self::android::*;
++    } else if #[cfg(target_os = "macos")] {
++        mod utimes;
++        mod macos;
++        pub use self::macos::*;
++    } else if #[cfg(any(target_os = "aix",
++                        target_os = "nto",
++                        target_os = "solaris",
++                        target_os = "illumos",
++                        target_os = "emscripten",
++                        target_os = "freebsd",
++                        target_os = "netbsd",
++                        target_os = "openbsd",
++                        target_os = "haiku"))] {
++        mod utimensat;
++        pub use self::utimensat::*;
++    } else {
++        mod utimes;
++        pub use self::utimes::*;
++    }
++}
++
++#[allow(dead_code)]
++fn to_timespec(ft: &Option<FileTime>) -> timespec {
++    let mut ts: timespec = unsafe { std::mem::zeroed() };
++    if let &Some(ft) = ft {
++        ts.tv_sec = ft.seconds() as time_t;
++        ts.tv_nsec = ft.nanoseconds() as _;
++    } else {
++        ts.tv_sec = 0;
++        ts.tv_nsec = UTIME_OMIT as _;
++    }
++
++    ts
++}
++
++pub fn from_last_modification_time(meta: &fs::Metadata) -> FileTime {
++    FileTime {
++        seconds: meta.mtime(),
++        nanos: meta.mtime_nsec() as u32,
++    }
++}
++
++pub fn from_last_access_time(meta: &fs::Metadata) -> FileTime {
++    FileTime {
++        seconds: meta.atime(),
++        nanos: meta.atime_nsec() as u32,
++    }
++}
++
++pub fn from_creation_time(meta: &fs::Metadata) -> Option<FileTime> {
++    meta.created().map(|i| i.into()).ok()
++}
++
++pub fn open(path: &Path) -> io::Result<fs::File> {
++    // Try a read-only open, but if that fails try a write-only open, and if
++    // that fails then give up.
++    fs::File::open(path).or_else(|_| fs::OpenOptions::new().write(true).open(path))
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/utimensat.rs /tmp/filetime-maturin-zos/src/unix/unix/utimensat.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/utimensat.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/utimensat.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,37 @@
++use crate::FileTime;
++use std::ffi::CString;
++use std::io;
++use std::os::unix::prelude::*;
++use std::path::Path;
++
++pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
++    set_times(p, Some(atime), Some(mtime), true)
++}
++
++fn set_times(
++    p: &Path,
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    symlink: bool,
++) -> io::Result<()> {
++    let flags = if symlink {
++        if cfg!(target_os = "emscripten") {
++            return Err(io::Error::new(
++                io::ErrorKind::Other,
++                "emscripten does not support utimensat for symlinks",
++            ));
++        }
++        libc::AT_SYMLINK_NOFOLLOW
++    } else {
++        0
++    };
++
++    let p = CString::new(p.as_os_str().as_bytes())?;
++    let times = [super::to_timespec(&atime), super::to_timespec(&mtime)];
++    let rc = unsafe { libc::utimensat(libc::AT_FDCWD, p.as_ptr(), times.as_ptr(), flags) };
++    if rc == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/utimes.rs /tmp/filetime-maturin-zos/src/unix/unix/utimes.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/unix/utimes.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/filetime-maturin-zos/src/unix/unix/utimes.rs	2026-08-14 23:43:35.068733321 -0400
+@@ -0,0 +1,77 @@
++use crate::FileTime;
++use std::ffi::CString;
++use std::fs;
++use std::io;
++use std::os::unix::prelude::*;
++use std::path::Path;
++
++fn get_times(
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    current: impl FnOnce() -> io::Result<fs::Metadata>,
++) -> io::Result<Option<(FileTime, FileTime)>> {
++    let pair = match (atime, mtime) {
++        (Some(a), Some(b)) => (a, b),
++        (None, None) => return Ok(None),
++        (Some(a), None) => {
++            let meta = current()?;
++            (a, FileTime::from_last_modification_time(&meta))
++        }
++        (None, Some(b)) => {
++            let meta = current()?;
++            (FileTime::from_last_access_time(&meta), b)
++        }
++    };
++    Ok(Some(pair))
++}
++
++#[allow(dead_code)]
++pub fn set_symlink_file_times(p: &Path, atime: FileTime, mtime: FileTime) -> io::Result<()> {
++    set_times(p, Some(atime), Some(mtime), true)
++}
++
++pub fn set_times(
++    p: &Path,
++    atime: Option<FileTime>,
++    mtime: Option<FileTime>,
++    symlink: bool,
++) -> io::Result<()> {
++    let (atime, mtime) = match get_times(atime, mtime, || p.metadata())? {
++        Some(pair) => pair,
++        None => return Ok(()),
++    };
++    let p = CString::new(p.as_os_str().as_bytes())?;
++    let times = [to_timeval(&atime), to_timeval(&mtime)];
++    let rc = unsafe {
++        if symlink {
++            libc::lutimes(p.as_ptr(), times.as_ptr())
++        } else {
++            libc::utimes(p.as_ptr(), times.as_ptr())
++        }
++    };
++    return if rc == 0 {
++        Ok(())
++    } else {
++        Err(io::Error::last_os_error())
++    };
++}
++
++fn to_timeval(ft: &FileTime) -> libc::timeval {
++    libc::timeval {
++        tv_sec: ft.seconds() as libc::time_t,
++        tv_usec: (ft.nanoseconds() / 1000) as libc::suseconds_t,
++        #[cfg(target_os = "zos")]
++        tv_usec_pad: 0,
++    }
++}
++
++#[cfg(target_env = "uclibc")]
++fn to_timespec(ft: &FileTime) -> libc::timespec {
++    libc::timespec {
++        tv_sec: ft.seconds() as libc::time_t,
++        #[cfg(all(target_arch = "x86_64", target_pointer_width = "32"))]
++        tv_nsec: (ft.nanoseconds()) as i64,
++        #[cfg(not(all(target_arch = "x86_64", target_pointer_width = "32")))]
++        tv_nsec: (ft.nanoseconds()) as libc::c_long,
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/utimes.rs /tmp/filetime-maturin-zos/src/unix/utimes.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/filetime-0.2.27/src/unix/utimes.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/filetime-maturin-zos/src/unix/utimes.rs	2026-08-14 23:55:34.106344753 -0400
+@@ -115,6 +115,8 @@
+     libc::timeval {
+         tv_sec: ft.seconds() as libc::time_t,
+         tv_usec: (ft.nanoseconds() / 1000) as libc::suseconds_t,
++        #[cfg(target_os = "zos")]
++        tv_usec_pad: 0,
+     }
+ }
+ 

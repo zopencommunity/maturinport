@@ -1,0 +1,166 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/data.rs /tmp/icu_locale_core-maturin-zos/src/data.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/data.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/data.rs	2026-08-15 00:45:12.596021066 -0400
+@@ -207,24 +207,29 @@
+             };
+ 
+         let subdivision = if let Some((key, value)) = keyword {
+-            if let Some(value) = value
+-                && let RegionalSubdivision::UNICODE_EXTENSION_KEY = key
+-            {
++            if let Some(value) = value {
++              if let RegionalSubdivision::UNICODE_EXTENSION_KEY = key {
+                 let Ok(subdivision) = unicode_ext::SubdivisionId::try_from_subtag(value) else {
+                     return Err(ParseError::InvalidExtension);
+                 };
+-                if let Some(region) = region
+-                    && (region.into_raw()[0] != subdivision.region.into_raw()[0]
++                if let Some(region) = region {
++                  if region.into_raw()[0] != subdivision.region.into_raw()[0]
+                         || region.into_raw()[1] != subdivision.region.into_raw()[1]
+-                        || region.into_raw()[2] != subdivision.region.into_raw()[2])
+-                {
++                        || region.into_raw()[2] != subdivision.region.into_raw()[2]
++                  {
+                     Some(unicode_ext::SubdivisionId::new(
+                         region,
+                         unicode_ext::SubdivisionSuffix::UNKNOWN,
+                     ))
++                  } else {
++                    Some(subdivision)
++                  }
+                 } else {
+                     Some(subdivision)
+                 }
++              } else {
++                return Err(ParseError::InvalidExtension);
++              }
+             } else {
+                 return Err(ParseError::InvalidExtension);
+             }
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/extensions/other/mod.rs /tmp/icu_locale_core-maturin-zos/src/extensions/other/mod.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/extensions/other/mod.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/extensions/other/mod.rs	2026-08-15 00:44:30.483623379 -0400
+@@ -158,7 +158,7 @@
+     pub fn get_ext_str(&self) -> &str {
+         debug_assert!(self.ext.is_ascii_alphanumeric());
+         // Safety: from safety invariant on self.ext (that it is ASCII)
+-        unsafe { str::from_utf8_unchecked(core::slice::from_ref(&self.ext)) }
++        unsafe { core::str::from_utf8_unchecked(core::slice::from_ref(&self.ext)) }
+     }
+ 
+     /// Gets the tag character for this extension as a char.
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/extensions/transform/mod.rs /tmp/icu_locale_core-maturin-zos/src/extensions/transform/mod.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/extensions/transform/mod.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/extensions/transform/mod.rs	2026-08-15 00:47:08.248670201 -0400
+@@ -199,13 +199,13 @@
+         let mut tlang = None;
+         let mut tfields = LiteMap::new();
+ 
+-        if let Some(subtag) = iter.peek()
+-            && subtags::Language::try_from_utf8(subtag).is_ok()
+-        {
+-            tlang = Some(parse_language_identifier_from_iter(
+-                iter,
+-                ParserMode::Partial,
+-            )?);
++        if let Some(subtag) = iter.peek() {
++            if subtags::Language::try_from_utf8(subtag).is_ok() {
++                tlang = Some(parse_language_identifier_from_iter(
++                    iter,
++                    ParserMode::Partial,
++                )?);
++            }
+         }
+ 
+         let mut current_tkey = None;
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/langid.rs /tmp/icu_locale_core-maturin-zos/src/langid.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/langid.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/langid.rs	2026-08-15 00:44:59.219194351 -0400
+@@ -407,15 +407,15 @@
+         if !subtag_matches!(subtags::Language, iter, self.language) {
+             return false;
+         }
+-        if let Some(ref script) = self.script
+-            && !subtag_matches!(subtags::Script, iter, *script)
+-        {
+-            return false;
++        if let Some(ref script) = self.script {
++            if !subtag_matches!(subtags::Script, iter, *script) {
++                return false;
++            }
+         }
+-        if let Some(ref region) = self.region
+-            && !subtag_matches!(subtags::Region, iter, *region)
+-        {
+-            return false;
++        if let Some(ref region) = self.region {
++            if !subtag_matches!(subtags::Region, iter, *region) {
++                return false;
++            }
+         }
+         for variant in self.variants.iter() {
+             if !subtag_matches!(subtags::Variant, iter, *variant) {
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/locale.rs /tmp/icu_locale_core-maturin-zos/src/locale.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/locale.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/locale.rs	2026-08-15 00:44:59.220173948 -0400
+@@ -415,15 +415,15 @@
+         if !subtag_matches!(subtags::Language, iter, self.id.language) {
+             return false;
+         }
+-        if let Some(ref script) = self.id.script
+-            && !subtag_matches!(subtags::Script, iter, *script)
+-        {
+-            return false;
++        if let Some(ref script) = self.id.script {
++            if !subtag_matches!(subtags::Script, iter, *script) {
++                return false;
++            }
+         }
+-        if let Some(ref region) = self.id.region
+-            && !subtag_matches!(subtags::Region, iter, *region)
+-        {
+-            return false;
++        if let Some(ref region) = self.id.region {
++            if !subtag_matches!(subtags::Region, iter, *region) {
++                return false;
++            }
+         }
+         for variant in self.id.variants.iter() {
+             if !subtag_matches!(subtags::Variant, iter, *variant) {
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/parser/langid.rs /tmp/icu_locale_core-maturin-zos/src/parser/langid.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_locale_core-2.3.0/src/parser/langid.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_locale_core-maturin-zos/src/parser/langid.rs	2026-08-15 00:46:59.418049098 -0400
+@@ -196,17 +196,16 @@
+         iter = iter.next_const().0;
+     }
+ 
+-    if matches!(mode, ParserMode::Locale)
+-        && let Some(subtag) = iter.peek()
+-    {
++    if matches!(mode, ParserMode::Locale) {
++        if let Some(subtag) = iter.peek() {
+         match ExtensionType::try_from_utf8(subtag) {
+             Ok(ExtensionType::Unicode) => {
+                 iter = iter.next_const().0;
+-                if let Some(peek) = iter.peek()
+-                    && Attribute::try_from_utf8(peek).is_ok()
+-                {
+-                    // We cannot handle Attributes in a const context
+-                    return Err(ParseError::InvalidSubtag);
++                if let Some(peek) = iter.peek() {
++                    if Attribute::try_from_utf8(peek).is_ok() {
++                        // We cannot handle Attributes in a const context
++                        return Err(ParseError::InvalidSubtag);
++                    }
+                 }
+ 
+                 let mut key = None;
+@@ -247,6 +246,7 @@
+             Ok(_) => return Err(ParseError::InvalidSubtag),
+             Err(e) => return Err(e),
+         }
++        }
+     }
+ 
+     Ok((language, script, region, variant, keyword))

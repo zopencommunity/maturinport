@@ -1,0 +1,40 @@
+#!/bin/bash
+# Build environment for maturin on z/OS
+# Maturin: Build and publish crates with pyo3 bindings as Python packages
+# Port of maturin v1.14.1 to z/OS
+
+export ZOPEN_BUILD_LINE="STABLE"
+export ZOPEN_STABLE_TYPE="BARE"
+export ZOPEN_DEV_TYPE="BARE"
+
+export ZOPEN_STABLE_TAG="v1.14.1"
+export ZOPEN_STABLE_URL="https://github.com/PyO3/maturin"
+export ZOPEN_STABLE_DEPS="curl gzip tar git"
+export ZOPEN_DEV_DEPS="curl gzip tar git"
+
+export ZOPEN_CATEGORIES="rust python"
+
+# Rust cross-compilation settings
+export RUSTCROSS_VERSION="1.86"
+export CARGO_BUILD_TARGET="s390x-ibm-zos"
+
+zopen_check_results() {
+  dir="$1"
+  pfx="$2"
+  chk="$ZOPEN_TYPE"
+  if [ "${chk}" = "STABLE" ] || [ "${chk}" = "DEV" ]; then
+    # Basic smoke test
+    if "${pfx}"/bin/maturin --version > /dev/null 2>&1; then
+      echo "maturin --version: PASSED"
+    else
+      echo "maturin --version: FAILED"
+      return 1
+    fi
+  fi
+}
+
+zopen_post_install() {
+  prefix="$1"
+  # Create symlinks
+  ln -sf maturin "${prefix}/bin/maturin1"
+}

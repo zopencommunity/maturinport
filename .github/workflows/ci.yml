@@ -1,0 +1,20 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate buildenv
+        run: |
+          source buildenv
+          echo "ZOPEN_STABLE_TAG=${ZOPEN_STABLE_TAG}"
+          echo "ZOPEN_STABLE_URL=${ZOPEN_STABLE_URL}"
+          echo "Patches present:"
+          find patches/ -name "*.patch" | sort

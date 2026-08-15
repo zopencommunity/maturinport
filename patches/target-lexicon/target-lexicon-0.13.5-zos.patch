@@ -1,0 +1,46 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.13.5/src/targets.rs /tmp/target-lexicon-maturin-zos/src/targets.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.13.5/src/targets.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/target-lexicon-maturin-zos/src/targets.rs	2026-08-14 23:43:05.421000799 -0400
+@@ -746,6 +746,7 @@
+     Windows,
+     /// An alternate name for [visionOS][Self::VisionOS].
+     XROS(Option<DeploymentTarget>),
++    Zos,
+ }
+ 
+ impl OperatingSystem {
+@@ -807,6 +808,7 @@
+             WatchOS(deployment_target) => darwin_version("watchos", deployment_target),
+             Windows => Cow::Borrowed("windows"),
+             XROS(deployment_target) => darwin_version("xros", deployment_target),
++            Zos => Cow::Borrowed("zos"),
+         }
+     }
+ 
+@@ -1119,6 +1121,7 @@
+             _ => BinaryFormat::Unknown,
+         },
+         OperatingSystem::Aix => BinaryFormat::Xcoff,
++        OperatingSystem::Zos => BinaryFormat::Xcoff,
+         os if os.is_like_darwin() => BinaryFormat::Macho,
+         OperatingSystem::Windows => BinaryFormat::Coff,
+         OperatingSystem::Nebulet
+@@ -1654,6 +1657,7 @@
+             "wasip1" => WasiP1,
+             "wasip2" => WasiP2,
+             "windows" => Windows,
++            "zos" => Zos,
+             "espidf" => Espidf,
+             _ => return Err(()),
+         })
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.13.5/src/triple.rs /tmp/target-lexicon-maturin-zos/src/triple.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/target-lexicon-0.13.5/src/triple.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/target-lexicon-maturin-zos/src/triple.rs	2026-08-14 23:42:34.147262037 -0400
+@@ -144,6 +144,7 @@
+             OperatingSystem::Nebulet
+             | OperatingSystem::Emscripten
+             | OperatingSystem::Wasi
++            | OperatingSystem::Zos
+             | OperatingSystem::Unknown => match self.architecture {
+                 Architecture::Wasm32 => CallingConvention::WasmBasicCAbi,
+                 _ => return Err(()),

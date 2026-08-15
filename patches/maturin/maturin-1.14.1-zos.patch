@@ -1,0 +1,39 @@
+diff --git a/src/compression.rs b/src/compression.rs
+index 9253d20..7950083 100644
+--- a/src/compression.rs
++++ b/src/compression.rs
+@@ -42,8 +42,8 @@ impl From<CompressionMethod> for zip::CompressionMethod {
+         match source {
+             CompressionMethod::Deflated => zip::CompressionMethod::Deflated,
+             CompressionMethod::Stored => zip::CompressionMethod::Stored,
+-            CompressionMethod::Bzip2 => zip::CompressionMethod::Bzip2,
+-            CompressionMethod::Zstd => zip::CompressionMethod::ZSTD,
++            CompressionMethod::Bzip2 => zip::CompressionMethod::Deflated,
++            CompressionMethod::Zstd => zip::CompressionMethod::Deflated,
+         }
+     }
+ }
+diff --git a/src/lib.rs b/src/lib.rs
+index 53741a2..18db45c 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -21,6 +21,7 @@
+ //!   for the build on the github releases page.
+ //!   (https://github.com/hwchen/secret-service-rs/issues/9)
+ 
++#![feature(let_chains)]
+ #![deny(missing_docs)]
+ 
+ pub use crate::bridge::{BridgeModel, PyO3, PyO3Crate, StableAbi, StableAbiKind, StableAbiVersion};
+diff --git a/src/main.rs b/src/main.rs
+index 9873f04..2da6251 100644
+--- a/src/main.rs
++++ b/src/main.rs
+@@ -3,6 +3,7 @@
+ //!
+ //! Run with --help for usage information
+ 
++#![feature(let_chains)]
+ use anyhow::{Context, Result};
+ use cargo_options::heading;
+ #[cfg(feature = "zig")]

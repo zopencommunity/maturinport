@@ -1,0 +1,89 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/time-0.3.55/src/date.rs /tmp/time-maturin-zos/src/date.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/time-0.3.55/src/date.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/time-maturin-zos/src/date.rs	2026-08-15 00:06:48.297575559 -0400
+@@ -845,12 +845,11 @@
+         let whole_days = whole_days as i32;
+ 
+         // Fast path for when the result is in the same year.
+-        if let Some(new_ordinal) = ordinal.checked_add(whole_days)
+-            && new_ordinal >= 1
+-            && new_ordinal <= days_in_year
+-        {
+-            // Safety: `new_ordinal` is in range and `is_leap_year` is correct
+-            return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++        if let Some(new_ordinal) = ordinal.checked_add(whole_days) {
++            if new_ordinal >= 1 && new_ordinal <= days_in_year {
++                // Safety: `new_ordinal` is in range and `is_leap_year` is correct
++                return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++            }
+         }
+ 
+         let julian_day = const_try_opt!(self.to_julian_day().checked_add(whole_days));
+@@ -905,12 +904,11 @@
+         let whole_days = whole_days as i32;
+ 
+         // Fast path for when the result is in the same year.
+-        if let Some(new_ordinal) = ordinal.checked_add(whole_days)
+-            && new_ordinal >= 1
+-            && new_ordinal <= days_in_year
+-        {
+-            // Safety: `new_ordinal` is in range and `is_leap_year` is correct
+-            return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++        if let Some(new_ordinal) = ordinal.checked_add(whole_days) {
++            if new_ordinal >= 1 && new_ordinal <= days_in_year {
++                // Safety: `new_ordinal` is in range and `is_leap_year` is correct
++                return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++            }
+         }
+ 
+         let julian_day = const_try_opt!(self.to_julian_day().checked_add(whole_days));
+@@ -967,12 +965,11 @@
+         let whole_days = whole_days as i32;
+ 
+         // Fast path for when the result is in the same year.
+-        if let Some(new_ordinal) = ordinal.checked_sub(whole_days)
+-            && new_ordinal >= 1
+-            && new_ordinal <= days_in_year
+-        {
+-            // Safety: `new_ordinal` is in range and `is_leap_year` is correct
+-            return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++        if let Some(new_ordinal) = ordinal.checked_sub(whole_days) {
++            if new_ordinal >= 1 && new_ordinal <= days_in_year {
++                // Safety: `new_ordinal` is in range and `is_leap_year` is correct
++                return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++            }
+         }
+ 
+         let julian_day = const_try_opt!(self.to_julian_day().checked_sub(whole_days));
+@@ -1027,12 +1024,11 @@
+         let whole_days = whole_days as i32;
+ 
+         // Fast path for when the result is in the same year.
+-        if let Some(new_ordinal) = ordinal.checked_sub(whole_days)
+-            && new_ordinal >= 1
+-            && new_ordinal <= days_in_year
+-        {
+-            // Safety: `new_ordinal` is in range and `is_leap_year` is correct
+-            return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++        if let Some(new_ordinal) = ordinal.checked_sub(whole_days) {
++            if new_ordinal >= 1 && new_ordinal <= days_in_year {
++                // Safety: `new_ordinal` is in range and `is_leap_year` is correct
++                return Some(unsafe { Self::from_parts(year, is_leap_year, new_ordinal as u16) });
++            }
+         }
+ 
+         let julian_day = const_try_opt!(self.to_julian_day().checked_sub(whole_days));
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/time-0.3.55/src/lib.rs /tmp/time-maturin-zos/src/lib.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/time-0.3.55/src/lib.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/time-maturin-zos/src/lib.rs	2026-08-15 00:05:59.330838366 -0400
+@@ -79,6 +79,10 @@
+ 
+ #![doc(html_playground_url = "https://play.rust-lang.org")]
+ #![cfg_attr(docsrs, feature(doc_cfg, doc_notable_trait))]
++// Enable nightly features needed for cross-compilation compatibility
++#![feature(integer_sign_cast)]
++#![feature(unsigned_is_multiple_of)]
++#![feature(inherent_str_constructors)]
+ #![no_std]
+ #![doc(html_favicon_url = "https://avatars0.githubusercontent.com/u/55999857")]
+ #![doc(html_logo_url = "https://avatars0.githubusercontent.com/u/55999857")]

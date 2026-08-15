@@ -1,0 +1,12 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.0/src/request.rs /tmp/icu_provider-maturin-zos/src/request.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_provider-2.3.0/src/request.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_provider-maturin-zos/src/request.rs	2026-08-15 00:48:24.347711664 -0400
+@@ -324,7 +324,7 @@
+         };
+ 
+         // SAFETY: `validate` requires a UTF-8 subset
+-        let s = unsafe { str::from_utf8_unchecked(code_units) };
++        let s = unsafe { core::str::from_utf8_unchecked(code_units) };
+ 
+         // SAFETY: `Self` has the same layout as `str`
+         Ok(unsafe { &*(s as *const str as *const Self) })

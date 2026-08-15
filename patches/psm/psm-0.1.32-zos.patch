@@ -1,0 +1,11 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.32/build.rs /tmp/psm-maturin-zos/build.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/psm-0.1.32/build.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/psm-maturin-zos/build.rs	2026-08-15 00:37:59.224319648 -0400
+@@ -43,6 +43,7 @@
+         ("powerpc64", "little", _, _) => Some(("src/arch/powerpc64_openpower.s", true)),
+         ("powerpc64", _, "aix", _) => Some(("src/arch/powerpc64_aix.s", true)),
+         ("powerpc64", _, _, _) => Some(("src/arch/powerpc64.s", true)),
++        ("s390x", _, "zos", _) => None,
+         ("s390x", _, _, _) => Some(("src/arch/zseries_linux.s", true)),
+         ("mips", _, _, _) => Some(("src/arch/mips_eabi.s", true)),
+         ("mips64", _, _, _) => Some(("src/arch/mips64_eabi.s", true)),

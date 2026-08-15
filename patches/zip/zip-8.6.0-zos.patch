@@ -1,0 +1,95 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/datetime.rs /tmp/zip-maturin-zos/src/datetime.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/datetime.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zip-maturin-zos/src/datetime.rs	2026-08-15 00:40:26.094048396 -0400
+@@ -217,12 +217,14 @@
+             self.year().into(),
+             self.month().into(),
+             self.day().into(),
+-        ) && let Some(chrono_datetime) = chrono_date.and_hms_opt(
+-            self.hour().into(),
+-            self.minute().into(),
+-            self.second().into(),
+         ) {
+-            return Some(chrono_datetime);
++            if let Some(chrono_datetime) = chrono_date.and_hms_opt(
++                self.hour().into(),
++                self.minute().into(),
++                self.second().into(),
++            ) {
++                return Some(chrono_datetime);
++            }
+         }
+         None
+     }
+@@ -237,7 +239,7 @@
+     }
+ 
+     pub(crate) fn is_leap_year(year: u16) -> bool {
+-        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
++        year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+     }
+ 
+     /// Converts an msdos (u16, u16) pair to a `DateTime` object if it represents a valid date and
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/read.rs /tmp/zip-maturin-zos/src/read.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/read.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zip-maturin-zos/src/read.rs	2026-08-15 00:40:33.724612031 -0400
+@@ -434,10 +434,10 @@
+ 
+             // Set original timestamp.
+             #[cfg(feature = "chrono")]
+-            if let Some(last_modified) = file.last_modified()
+-                && let Some(t) = last_modified.datetime_to_systemtime()
+-            {
+-                outfile.set_modified(t)?;
++            if let Some(last_modified) = file.last_modified() {
++                if let Some(t) = last_modified.datetime_to_systemtime() {
++                    outfile.set_modified(t)?;
++                }
+             }
+         }
+ 
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/write.rs /tmp/zip-maturin-zos/src/write.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zip-8.6.0/src/write.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zip-maturin-zos/src/write.rs	2026-08-15 00:24:31.713280491 -0400
+@@ -425,13 +425,13 @@
+                 };
+                 let header_id = data.read_u16_le()?;
+                 // Some extra fields are authorized
+-                if let Err(()) = UsedExtraField::try_from(header_id)
+-                    && EXTRA_FIELD_MAPPING.contains(&header_id)
+-                {
+-                    return Err(ZipError::Io(io::Error::other(format!(
+-                        "Extra data header ID {header_id:#06} (0x{header_id:x}) \
+-                            requires crate feature \"unreserved\"",
+-                    ))));
++                if let Err(()) = UsedExtraField::try_from(header_id) {
++                    if EXTRA_FIELD_MAPPING.contains(&header_id) {
++                        return Err(ZipError::Io(io::Error::other(format!(
++                            "Extra data header ID {header_id:#06} (0x{header_id:x}) \
++                                requires crate feature \"unreserved\"",
++                        ))));
++                    }
+                 }
+                 data.seek(SeekFrom::Current(-2))?;
+             }
+@@ -2021,13 +2021,13 @@
+ 
+ impl<W: Write + Seek> Drop for ZipWriter<W> {
+     fn drop(&mut self) {
+-        if !self.inner.is_closed()
+-            && let Err(e) = self.finalize()
+-        {
+-            let _ = write!(
+-                io::stderr(),
+-                "ZipWriter::drop: failed to finalize archive: {e:?}"
+-            );
++        if !self.inner.is_closed() {
++            if let Err(e) = self.finalize() {
++                let _ = write!(
++                    io::stderr(),
++                    "ZipWriter::drop: failed to finalize archive: {e:?}"
++                );
++            }
+         }
+     }
+ }

@@ -1,0 +1,62 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/src/codepointinvlist/utils.rs /tmp/icu_collections-maturin-zos/src/codepointinvlist/utils.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/src/codepointinvlist/utils.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_collections-maturin-zos/src/codepointinvlist/utils.rs	2026-08-15 00:44:30.473579553 -0400
+@@ -16,7 +16,7 @@
+ #[expect(clippy::unwrap_used)] // by is_empty check
+ pub fn is_valid_zv(inv_list_zv: &ZeroVec<'_, PotentialCodePoint>) -> bool {
+     inv_list_zv.is_empty()
+-        || (inv_list_zv.len().is_multiple_of(2)
++        || (inv_list_zv.len() % 2 == 0
+             && inv_list_zv.as_ule_slice().windows(2).all(|chunk| {
+                 <PotentialCodePoint as AsULE>::from_unaligned(chunk[0])
+                     < <PotentialCodePoint as AsULE>::from_unaligned(chunk[1])
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/src/codepointinvliststringlist/mod.rs /tmp/icu_collections-maturin-zos/src/codepointinvliststringlist/mod.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/icu_collections-2.3.0/src/codepointinvliststringlist/mod.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/icu_collections-maturin-zos/src/codepointinvliststringlist/mod.rs	2026-08-15 00:44:43.206267314 -0400
+@@ -165,10 +165,10 @@
+     /// ```
+     pub fn contains_str(&self, s: &str) -> bool {
+         let mut chars = s.chars();
+-        if let Some(first_char) = chars.next()
+-            && chars.next().is_none()
+-        {
+-            return self.contains(first_char);
++        if let Some(first_char) = chars.next() {
++            if chars.next().is_none() {
++                return self.contains(first_char);
++            }
+         }
+         self.str_list.binary_search(s).is_ok()
+     }
+@@ -177,10 +177,10 @@
+     pub fn contains_utf8(&self, s: &[u8]) -> bool {
+         use utf8_iter::Utf8CharsEx;
+         let mut chars = s.chars();
+-        if let Some(first_char) = chars.next()
+-            && chars.next().is_none()
+-        {
+-            return self.contains(first_char);
++        if let Some(first_char) = chars.next() {
++            if chars.next().is_none() {
++                return self.contains(first_char);
++            }
+         }
+         self.str_list
+             .binary_search_by(|t| t.as_bytes().cmp(s))
+@@ -255,11 +255,11 @@
+         let mut strings = Vec::<&str>::new();
+         for s in it {
+             let mut chars = s.chars();
+-            if let Some(first_char) = chars.next()
+-                && chars.next().is_none()
+-            {
+-                builder.add_char(first_char);
+-                continue;
++            if let Some(first_char) = chars.next() {
++                if chars.next().is_none() {
++                    builder.add_char(first_char);
++                    continue;
++                }
+             }
+             strings.push(s);
+         }

@@ -1,0 +1,23 @@
+diff -ruN /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/platform-info-2.1.0/src/platform/unix.rs /tmp/platform-info-maturin-zos/src/platform/unix.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/platform-info-2.1.0/src/platform/unix.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/platform-info-maturin-zos/src/platform/unix.rs	2026-08-15 00:16:29.721114934 -0400
+@@ -135,7 +135,8 @@
+             target_os = "freebsd",
+             target_os = "openbsd",
+             target_os = "netbsd",
+-            target_os = "haiku"
++            target_os = "haiku",
++            target_os = "zos"
+         )))]
+         {
+             debug_struct = debug_struct.field("domainname", &oss_from_cstr(&self.0.domainname));
+@@ -173,7 +174,8 @@
+             target_os = "freebsd",
+             target_os = "openbsd",
+             target_os = "netbsd",
+-            target_os = "haiku"
++            target_os = "haiku",
++            target_os = "zos"
+         )))]
+         {
+             equal = equal && (self.0.domainname == other.0.domainname);

@@ -1,0 +1,3055 @@
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/aarch64.rs /tmp/zeroize-maturin-zos/src/aarch64.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/aarch64.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zeroize-maturin-zos/src/aarch64.rs	2026-08-14 23:42:00.420640297 -0400
+@@ -1,6 +1,6 @@
+ //! [`Zeroize`] impls for ARM64 SIMD registers.
+ 
+-use crate::{atomic_fence, volatile_write, Zeroize};
++use crate::{Zeroize, optimization_barrier, volatile_write};
+ 
+ use core::arch::aarch64::*;
+ 
+@@ -11,7 +11,7 @@
+                 #[inline]
+                 fn zeroize(&mut self) {
+                     volatile_write(self, unsafe { core::mem::zeroed() });
+-                    atomic_fence();
++                    optimization_barrier(self);
+                 }
+             }
+         )+
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/barrier.rs /tmp/zeroize-maturin-zos/src/barrier.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/barrier.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/src/barrier.rs	2026-08-14 23:42:00.420640297 -0400
+@@ -0,0 +1,104 @@
++/// Observe the referenced data and prevent the compiler from removing previous writes to it.
++///
++/// This function acts like [`core::hint::black_box`] but takes a reference and
++/// does not return the passed value.
++///
++/// It's implemented using the [`core::arch::asm!`] macro on target arches where `asm!` is stable,
++/// i.e. `aarch64`, `arm`, `arm64ec`, `loongarch64`, `riscv32`, `riscv64`, `s390x`, `x86`, and
++/// `x86_64`.
++///
++/// On all other targets it's implemented using [`core::hint::black_box`] and custom `black_box`
++/// implemented using `#[inline(never)]` and `read_volatile`.
++///
++/// # Examples
++/// ```
++/// use core::num::NonZeroU32;
++/// use zeroize::{ZeroizeOnDrop, zeroize_flat_type};
++///
++/// # type ThirdPartyType = u32;
++///
++/// struct DataToZeroize {
++///     buf: [u8; 32],
++///     // `ThirdPartyType` can be a type with private fields
++///     // defined in a third-party crate and which does not implement
++///     // `Zeroize` or zeroization on drop.
++///     data: ThirdPartyType,
++///     pos: NonZeroU32,
++/// }
++///
++/// struct SomeMoreFlatData(u64);
++///
++/// impl Drop for DataToZeroize {
++///     fn drop(&mut self) {
++///         self.buf = [0u8; 32];
++///         self.data = ThirdPartyType::default();
++///         self.pos = NonZeroU32::new(32).unwrap();
++///         zeroize::optimization_barrier(self);
++///     }
++/// }
++///
++/// impl zeroize::ZeroizeOnDrop for DataToZeroize {}
++///
++/// let mut data = DataToZeroize {
++///     buf: [3u8; 32],
++///     data: ThirdPartyType::default(),
++///     pos: NonZeroU32::new(32).unwrap(),
++/// };
++///
++/// // data gets zeroized when dropped
++/// ```
++///
++/// Note that erasure of `ThirdPartyType` demonstrated above can be fragile if it contains
++/// `MaybeUninit` or `union` data. It also does not perform erasure of types like `Box` or `Vec`.
++pub fn optimization_barrier<T: ?Sized>(val: &T) {
++    #[cfg(all(
++        not(miri),
++        not(target_os = "zos"),
++        any(
++            target_arch = "aarch64",
++            target_arch = "arm",
++            target_arch = "arm64ec",
++            target_arch = "loongarch64",
++            target_arch = "riscv32",
++            target_arch = "riscv64",
++            target_arch = "s390x",
++            target_arch = "x86",
++            target_arch = "x86_64",
++        )
++    ))]
++    unsafe {
++        core::arch::asm!(
++            "# {}",
++            in(reg) core::ptr::from_ref::<T>(val).cast::<()>(),
++            options(readonly, preserves_flags, nostack),
++        );
++    }
++    #[cfg(not(all(
++        not(miri),
++        not(target_os = "zos"),
++        any(
++            target_arch = "aarch64",
++            target_arch = "arm",
++            target_arch = "arm64ec",
++            target_arch = "loongarch64",
++            target_arch = "riscv32",
++            target_arch = "riscv64",
++            target_arch = "s390x",
++            target_arch = "x86",
++            target_arch = "x86_64",
++        )
++    )))]
++    {
++        /// Custom version of `core::hint::black_box` implemented using
++        /// `#[inline(never)]` and `read_volatile`.
++        #[inline(never)]
++        fn custom_black_box(p: *const u8) {
++            let _ = unsafe { core::ptr::read_volatile(p) };
++        }
++
++        core::hint::black_box(val);
++        if size_of_val(val) > 0 {
++            custom_black_box(core::ptr::from_ref(val).cast::<u8>());
++        }
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/lib.rs /tmp/zeroize-maturin-zos/src/lib.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/lib.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zeroize-maturin-zos/src/lib.rs	2026-08-14 23:42:16.333851367 -0400
+@@ -1,54 +1,39 @@
+ #![no_std]
+ #![cfg_attr(docsrs, feature(doc_cfg))]
++#![doc = include_str!("../README.md")]
+ #![doc(
+     html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg",
+     html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg"
+ )]
+-#![warn(missing_docs, rust_2018_idioms, unused_qualifications)]
++#![allow(clippy::undocumented_unsafe_blocks, reason = "TODO")]
+ 
+-//! Securely zero memory with a simple trait ([`Zeroize`]) built on stable Rust
+-//! primitives which guarantee the operation will not be "optimized away".
+-//!
+-//! ## About
+-//!
+-//! [Zeroing memory securely is hard] - compilers optimize for performance, and
+-//! in doing so they love to "optimize away" unnecessary zeroing calls. There are
+-//! many documented "tricks" to attempt to avoid these optimizations and ensure
+-//! that a zeroing routine is performed reliably.
+-//!
+-//! This crate isn't about tricks: it uses [`core::ptr::write_volatile`]
+-//! and [`core::sync::atomic`] memory fences to provide easy-to-use, portable
+-//! zeroing behavior which works on all of Rust's core number types and slices
+-//! thereof, implemented in pure Rust with no usage of FFI or assembly.
+-//!
+-//! - No insecure fallbacks!
+-//! - No dependencies!
+-//! - No FFI or inline assembly! **WASM friendly** (and tested)!
+-//! - `#![no_std]` i.e. **embedded-friendly**!
+-//! - No functionality besides securely zeroing memory!
+-//! - (Optional) Custom derive support for zeroing complex structures
+-//!
+-//! ## Minimum Supported Rust Version
+-//!
+-//! Requires Rust **1.72** or newer.
+-//!
+-//! In the future, we reserve the right to change MSRV (i.e. MSRV is out-of-scope
+-//! for this crate's SemVer guarantees), however when we do it will be accompanied
+-//! by a minor version bump.
+-//!
+ //! ## Usage
+ //!
+-//! ```
+-//! use zeroize::Zeroize;
++//! ### Traits
+ //!
+-//! // Protip: don't embed secrets in your source code.
+-//! // This is just an example.
+-//! let mut secret = b"Air shield password: 1,2,3,4,5".to_vec();
+-//! // [ ... ] open the air shield here
++//! The [`Zeroize`] trait is the core API of this crate. It's intended to be impl'd on values that
++//! may-or-may-not contain secrets, for example the `zeroize` crate itself defines them on the
++//! core integers e.g. `u8`, `u16`, `i8`, `i16`, as well as arrays thereof. Its core API is
++//! [`Zeroize::zeroize`], a method which takes `&mut self` and writes over the type's internal
++//! memory with some placeholder value, typically some form of `0`.
++//!
++//! The [`DefaultIsZeroes`] marker trait can be impl'd on types which have a [`Default`] impl that
++//! can be used for [`Zeroize`]. Types which implement this trait receive a blanket impl of the
++//! [`Zeroize`] trait.
++//!
++//! We recommend that types which always contain secrets, and especially ones which need to maintain
++//! complex invariants, do NOT impl the [`Zeroize`] trait, but instead provide a [`Drop`] impl which
++//! takes care of erasing the secret values from memory directly. Such types can mark that they're
++//! doing this with the [`ZeroizeOnDrop`] marker trait. Note that [`ZeroizeOnDrop`] is *just* a
++//! marker trait, and making it actually work requires actually providing a [`Drop`] impl which
++//! takes care of zeroizing secrets.
++//!
++//! Why not impl [`Zeroize`] for such types, e.g. a `SecretKey` type? The problem is [`Zeroize`]
++//! would effectively leave such types in an invalid state, and a sort of use-after-zeroize
++//! condition becomes possible. For that reason, we recommend these types automatically handle
++//! zeroization in their [`Drop`] handler alone.
+ //!
+-//! // Now that we're done using the secret, zero it out.
+-//! secret.zeroize();
+-//! ```
++//! ### Supported types
+ //!
+ //! The [`Zeroize`] trait is impl'd on all of Rust's core scalar types including
+ //! integers, floats, `bool`, and `char`.
+@@ -72,7 +57,7 @@
+ //! impl [`Default`], which implements [`Zeroize`] by overwriting a value with
+ //! the default value.
+ //!
+-//! ## Custom Derive Support
++//! ### Custom Derive Support
+ //!
+ //! This crate has custom derive support for the `Zeroize` trait,
+ //! gated under the `zeroize` crate's `zeroize_derive` Cargo feature,
+@@ -133,7 +118,7 @@
+ //! # }
+ //! ```
+ //!
+-//! ## `Zeroizing<Z>`: wrapper for zeroizing arbitrary values on drop
++//! ### `Zeroizing<Z>`: wrapper for zeroizing arbitrary values on drop
+ //!
+ //! `Zeroizing<Z: Zeroize>` is a generic wrapper type that impls `Deref`
+ //! and `DerefMut`, allowing access to an inner value of type `Z`, and also
+@@ -158,26 +143,14 @@
+ //!
+ //! ## What guarantees does this crate provide?
+ //!
+-//! This crate guarantees the following:
+-//!
+-//! 1. The zeroing operation can't be "optimized away" by the compiler.
+-//! 2. All subsequent reads to memory will see "zeroized" values.
++//! This crate guarantees the zeroing operation can't be "optimized away" by the compiler, as
++//! ensured by LLVM's volatile semantics.
+ //!
+-//! LLVM's volatile semantics ensure #1 is true.
+-//!
+-//! Additionally, thanks to work by the [Unsafe Code Guidelines Working Group],
+-//! we can now fairly confidently say #2 is true as well. Previously there were
+-//! worries that the approach used by this crate (mixing volatile and
++//! Previously there were worries that the approach used by this crate (mixing volatile and
+ //! non-volatile accesses) was undefined behavior due to language contained
+ //! in the documentation for `write_volatile`, however after some discussion
+-//! [these remarks have been removed] and the specific usage pattern in this
+-//! crate is considered to be well-defined.
+-//!
+-//! Additionally this crate leverages [`core::sync::atomic::compiler_fence`]
+-//! with the strictest ordering
+-//! ([`Ordering::SeqCst`]) as a
+-//! precaution to help ensure reads are not reordered before memory has been
+-//! zeroed.
++//! within the [Unsafe Code Guidelines Working Group], [these remarks have been removed] and the
++//! specific usage pattern in this crate is considered to be well-defined.
+ //!
+ //! All of that said, there is still potential for microarchitectural attacks
+ //! (ala Spectre/Meltdown) to leak "zeroized" secrets through covert channels.
+@@ -186,30 +159,27 @@
+ //!
+ //! ## Stack/Heap Zeroing Notes
+ //!
+-//! This crate can be used to zero values from either the stack or the heap.
+-//!
+-//! However, be aware several operations in Rust can unintentionally leave
+-//! copies of data in memory. This includes but is not limited to:
+-//!
+-//! - Moves and [`Copy`]
+-//! - Heap reallocation when using [`Vec`] and [`String`]
+-//! - Borrowers of a reference making copies of the data
++//! This crate can be used to zero values from either the stack or the heap. We recommend storing
++//! sensitive data on the heap whenever possible to reduce the potential for making copies in memory
++//! via Rust move semantics, however note that stack spilling and other optimizations may leave
++//! temporary copies of data from the heap on the stack.
++//!
++//! [`zeroize_stack`] can be used to zeroize stack memory.
++//!
++//! [`Pin`][`core::pin::Pin`] can be leveraged in conjunction with this crate to ensure data kept
++//! on the stack isn't moved.
++//!
++//! The `Zeroize` impls for `Vec`, `String` and `CString` zeroize the entire capacity of their
++//! backing buffer, but cannot guarantee copies of the data were not previously made by buffer
++//! reallocation. It's therefore important when attempting to zeroize such buffers to initialize
++//! them to the correct capacity, and take care to prevent subsequent reallocation.
+ //!
+-//! [`Pin`][`core::pin::Pin`] can be leveraged in conjunction with this crate
+-//! to ensure data kept on the stack isn't moved.
+-//!
+-//! The `Zeroize` impls for `Vec`, `String` and `CString` zeroize the entire
+-//! capacity of their backing buffer, but cannot guarantee copies of the data
+-//! were not previously made by buffer reallocation. It's therefore important
+-//! when attempting to zeroize such buffers to initialize them to the correct
+-//! capacity, and take care to prevent subsequent reallocation.
+-//!
+-//! The `secrecy` crate provides higher-level abstractions for eliminating
++//! The [`secrecy`] crate provides higher-level abstractions for eliminating
+ //! usage patterns which can cause reallocations:
+ //!
+-//! <https://crates.io/crates/secrecy>
++//! [`secrecy`]: https://docs.rs/secrecy
+ //!
+-//! ## What about: clearing registers, mlock, mprotect, etc?
++//! ## What about: clearing registers, `mlock()`, `mprotect()`, etc?
+ //!
+ //! This crate is focused on providing simple, unobtrusive support for reliably
+ //! zeroing memory using the best approach possible on stable Rust.
+@@ -230,7 +200,6 @@
+ //! `unsafe` memory protection systems and just trying to make the best memory
+ //! zeroing crate available.
+ //!
+-//! [Zeroing memory securely is hard]: http://www.daemonology.net/blog/2014-09-04-how-to-zero-a-buffer.html
+ //! [Unsafe Code Guidelines Working Group]: https://github.com/rust-lang/unsafe-code-guidelines
+ //! [these remarks have been removed]: https://github.com/rust-lang/rust/pull/60972
+ //! [good cryptographic hygiene]: https://github.com/veorq/cryptocoding#clean-memory-of-secret-data
+@@ -238,7 +207,6 @@
+ 
+ #[cfg(feature = "alloc")]
+ extern crate alloc;
+-
+ #[cfg(feature = "std")]
+ extern crate std;
+ 
+@@ -250,16 +218,21 @@
+ #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+ mod x86;
+ 
++mod barrier;
++pub use barrier::optimization_barrier;
++
++mod stack;
++pub use stack::zeroize_stack;
++
+ use core::{
+     marker::{PhantomData, PhantomPinned},
+-    mem::{size_of, MaybeUninit},
++    mem::{MaybeUninit, size_of},
+     num::{
+-        self, NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize,
+-        NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
++        self, NonZeroI8, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI128, NonZeroIsize, NonZeroU8,
++        NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU128, NonZeroUsize,
+     },
+     ops, ptr,
+     slice::IterMut,
+-    sync::atomic,
+ };
+ 
+ #[cfg(feature = "alloc")]
+@@ -300,7 +273,7 @@
+ {
+     fn zeroize(&mut self) {
+         volatile_write(self, Z::default());
+-        atomic_fence();
++        optimization_barrier(self);
+     }
+ }
+ 
+@@ -318,10 +291,10 @@
+     u8, u16, u32, u64, u128, usize
+ }
+ 
+-/// `PhantomPinned` is zero sized so provide a ZeroizeOnDrop implementation.
++/// `PhantomPinned` is zero sized so provide a `ZeroizeOnDrop` implementation.
+ impl ZeroizeOnDrop for PhantomPinned {}
+ 
+-/// `()` is zero sized so provide a ZeroizeOnDrop implementation.
++/// `()` is zero sized so provide a `ZeroizeOnDrop` implementation.
+ impl ZeroizeOnDrop for () {}
+ 
+ macro_rules! impl_zeroize_for_non_zero {
+@@ -334,7 +307,7 @@
+                         None => unreachable!(),
+                     };
+                     volatile_write(self, ONE);
+-                    atomic_fence();
++                    optimization_barrier(self);
+                 }
+             }
+         )+
+@@ -400,7 +373,7 @@
+             // Ensures self is None and that the value was dropped. Without the take, the drop
+             // of the (zeroized) value isn't called, which might lead to a leak or other
+             // unexpected behavior. For example, if this were Option<Vec<T>>, the above call to
+-            // zeroize would not free the allocated memory, but the the `take` call will.
++            // zeroize would not free the allocated memory, but the `take` call will.
+             self.take();
+         }
+ 
+@@ -412,7 +385,11 @@
+         // The memory pointed to by `self` is valid for `size_of::<Self>()` bytes.
+         // It is also properly aligned, because `u8` has an alignment of `1`.
+         unsafe {
+-            volatile_set((self as *mut Self).cast::<u8>(), 0, size_of::<Self>());
++            volatile_set(
++                ptr::from_mut::<Self>(self).cast::<u8>(),
++                0,
++                size_of::<Self>(),
++            );
+         }
+ 
+         // Ensures self is overwritten with the `None` bit pattern. volatile_write can't be
+@@ -425,7 +402,7 @@
+         // done so by take().
+         unsafe { ptr::write_volatile(self, None) }
+ 
+-        atomic_fence();
++        optimization_barrier(self);
+     }
+ }
+ 
+@@ -441,7 +418,7 @@
+         // Safety:
+         // `MaybeUninit` is valid for any byte pattern, including zeros.
+         unsafe { ptr::write_volatile(self, MaybeUninit::zeroed()) }
+-        atomic_fence();
++        optimization_barrier(self);
+     }
+ }
+ 
+@@ -457,8 +434,8 @@
+ impl<Z> Zeroize for [MaybeUninit<Z>] {
+     fn zeroize(&mut self) {
+         let ptr = self.as_mut_ptr().cast::<MaybeUninit<u8>>();
+-        let size = self.len().checked_mul(size_of::<Z>()).unwrap();
+-        assert!(size <= isize::MAX as usize);
++        let size = self.len().checked_mul(size_of::<Z>()).expect("overflow");
++        assert!(isize::try_from(size).is_ok());
+ 
+         // Safety:
+         //
+@@ -467,7 +444,7 @@
+         // and 0 is a valid value for `MaybeUninit<Z>`
+         // The memory of the slice should not wrap around the address space.
+         unsafe { volatile_set(ptr, MaybeUninit::zeroed(), size) }
+-        atomic_fence();
++        optimization_barrier(self);
+     }
+ }
+ 
+@@ -484,7 +461,7 @@
+     Z: DefaultIsZeroes,
+ {
+     fn zeroize(&mut self) {
+-        assert!(self.len() <= isize::MAX as usize);
++        assert!(isize::try_from(self.len()).is_ok());
+ 
+         // Safety:
+         //
+@@ -493,7 +470,7 @@
+         // `self.len()` is also not larger than an `isize`, because of the assertion above.
+         // The memory of the slice should not wrap around the address space.
+         unsafe { volatile_set(self.as_mut_ptr(), Z::default(), self.len()) };
+-        atomic_fence();
++        optimization_barrier(self);
+     }
+ }
+ 
+@@ -510,7 +487,7 @@
+     fn zeroize(&mut self) {}
+ }
+ 
+-/// [`PhantomData` is always zero sized so provide a ZeroizeOnDrop implementation.
++/// [`PhantomData` is always zero sized so provide a `ZeroizeOnDrop` implementation.
+ impl<Z> ZeroizeOnDrop for PhantomData<Z> {}
+ 
+ macro_rules! impl_zeroize_tuple {
+@@ -617,10 +594,14 @@
+     }
+ }
+ 
+-/// `Zeroizing` is a a wrapper for any `Z: Zeroize` type which implements a
++/// `Zeroizing` is a wrapper for any `Z: Zeroize` type which implements a
+ /// `Drop` handler which zeroizes dropped values.
++///
++/// `Zeroizing<T>` is defined with `repr(transparent)`, which means it is
++/// guaranteed to have the same physical representation as the underlying type.
+ #[derive(Debug, Default, Eq, PartialEq)]
+-pub struct Zeroizing<Z: Zeroize>(Z);
++#[repr(transparent)]
++pub struct Zeroizing<Z: Zeroize + ?Sized>(Z);
+ 
+ impl<Z> Zeroizing<Z>
+ where
+@@ -659,7 +640,7 @@
+ 
+ impl<Z> ops::Deref for Zeroizing<Z>
+ where
+-    Z: Zeroize,
++    Z: Zeroize + ?Sized,
+ {
+     type Target = Z;
+ 
+@@ -671,7 +652,7 @@
+ 
+ impl<Z> ops::DerefMut for Zeroizing<Z>
+ where
+-    Z: Zeroize,
++    Z: Zeroize + ?Sized,
+ {
+     #[inline(always)]
+     fn deref_mut(&mut self) -> &mut Z {
+@@ -682,7 +663,7 @@
+ impl<T, Z> AsRef<T> for Zeroizing<Z>
+ where
+     T: ?Sized,
+-    Z: AsRef<T> + Zeroize,
++    Z: AsRef<T> + Zeroize + ?Sized,
+ {
+     #[inline(always)]
+     fn as_ref(&self) -> &T {
+@@ -693,7 +674,7 @@
+ impl<T, Z> AsMut<T> for Zeroizing<Z>
+ where
+     T: ?Sized,
+-    Z: AsMut<T> + Zeroize,
++    Z: AsMut<T> + Zeroize + ?Sized,
+ {
+     #[inline(always)]
+     fn as_mut(&mut self) -> &mut T {
+@@ -703,28 +684,28 @@
+ 
+ impl<Z> Zeroize for Zeroizing<Z>
+ where
+-    Z: Zeroize,
++    Z: Zeroize + ?Sized,
+ {
+     fn zeroize(&mut self) {
+         self.0.zeroize();
+     }
+ }
+ 
+-impl<Z> ZeroizeOnDrop for Zeroizing<Z> where Z: Zeroize {}
++impl<Z> ZeroizeOnDrop for Zeroizing<Z> where Z: Zeroize + ?Sized {}
+ 
+ impl<Z> Drop for Zeroizing<Z>
+ where
+-    Z: Zeroize,
++    Z: Zeroize + ?Sized,
+ {
+     fn drop(&mut self) {
+-        self.0.zeroize()
++        self.0.zeroize();
+     }
+ }
+ 
+ #[cfg(feature = "serde")]
+ impl<Z> serde::Serialize for Zeroizing<Z>
+ where
+-    Z: Zeroize + serde::Serialize,
++    Z: Zeroize + serde::Serialize + ?Sized,
+ {
+     #[inline(always)]
+     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+@@ -749,14 +730,6 @@
+     }
+ }
+ 
+-/// Use fences to prevent accesses from being reordered before this
+-/// point, which should hopefully help ensure that all accessors
+-/// see zeroes after this point.
+-#[inline(always)]
+-fn atomic_fence() {
+-    atomic::compiler_fence(atomic::Ordering::SeqCst);
+-}
+-
+ /// Perform a volatile write to the destination
+ #[inline(always)]
+ fn volatile_write<T: Copy + Sized>(dst: &mut T, src: T) {
+@@ -765,7 +738,7 @@
+ 
+ /// Perform a volatile `memset` operation which fills a slice with a value
+ ///
+-/// Safety:
++/// # Safety
+ /// The memory pointed to by `dst` must be a single allocated object that is valid for `count`
+ /// contiguous elements of `T`.
+ /// `count` must not be larger than an `isize`.
+@@ -780,13 +753,13 @@
+         // This is safe because there is room for at least `count` objects of type `T` in the
+         // allocation pointed to by `dst`, because `count <= isize::MAX` and because
+         // `dst.add(count)` must not wrap around the address space.
+-        let ptr = dst.add(i);
++        let ptr = unsafe { dst.add(i) };
+ 
+         // Safety:
+         //
+         // This is safe, because the pointer is valid and because `dst` is well aligned for `T` and
+         // `ptr` is an offset of `dst` by a multiple of `size_of::<T>()` bytes.
+-        ptr::write_volatile(ptr, src);
++        unsafe { ptr::write_volatile(ptr, src) };
+     }
+ }
+ 
+@@ -844,8 +817,10 @@
+     //
+     // This is safe because `size_of<T>()` returns the exact size of the object in memory, and
+     // `data_ptr` points directly to the first byte of the data.
+-    volatile_set(data as *mut u8, 0, size);
+-    atomic_fence()
++    unsafe {
++        volatile_set(data.cast::<u8>(), 0, size);
++    }
++    optimization_barrier(&data);
+ }
+ 
+ /// Internal module used as support for `AssertZeroizeOnDrop`.
+@@ -869,7 +844,7 @@
+ 
+     impl<T: Zeroize + ?Sized> AssertZeroize for T {
+         fn zeroize_or_on_drop(&mut self) {
+-            self.zeroize()
++            self.zeroize();
+         }
+     }
+ }
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/stack.rs /tmp/zeroize-maturin-zos/src/stack.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/stack.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/src/stack.rs	2026-08-14 23:42:00.420640297 -0400
+@@ -0,0 +1,52 @@
++/// Zeroize `N` bytes of stack space.
++///
++/// Most algorithm implementations use stack to store temporary data.
++/// Such temporaries may contain sensitive information (e.g. cryptgraphic keys)
++/// and can stay on stack after the computation is finished. If an attacker
++/// is able for some reasons to read stack data freely, it may result in
++/// leaking of the sensitive data.
++///
++/// # WARNING
++/// This function requires you to estimate how much stack space is used by your
++/// sensitive computation. This can be done by tools like [`cargo-call-stack`],
++/// but note that stack usage depends on optimization level and compiler flags.
++///
++/// [`cargo-call-stack`]: https://github.com/japaric/cargo-call-stack
++///
++/// Additionally, you must annotate your sensitive function with `#[inline(never)]`.
++///
++/// For example, the following example **DOES NOT** erase stack properly:
++/// ```
++/// pub fn encrypt_data(key: &[u8; 16], data: &mut [u8]) {
++///     leaking_encryption(key, data);
++///     zeroize::zeroize_stack::<65_536>();
++/// }
++/// # fn leaking_encryption(_: &[u8; 16], _: &mut [u8]) {}
++/// ```
++/// `leaking_encryption` may get inlined and `zeroize_stack` will erase
++/// stack memory above the stack frame reserved by `encrypt_data`, i.e.
++/// it will **NOT** erase stack memory used by `leaking_encryption`.
++///
++/// You should wrap your computation in the following way:
++/// ```
++/// #[inline(never)]
++/// fn encrypt_data_inner(key: &[u8; 16], data: &mut [u8]) {
++///     leaking_encryption(key, data);
++/// }
++///
++/// pub fn encrypt_data(key: &[u8; 16], data: &mut [u8]) {
++///     encrypt_data_inner(key, data);
++///     zeroize::zeroize_stack::<65_536>();
++/// }
++/// # fn leaking_encryption(_: &[u8; 16], _: &mut [u8]) {}
++/// ```
++/// Finally, note that `#[inline(never)]` is just a hint and may be ignored
++/// by the compiler. It works properly in practice, but such stack zeroization
++/// should be considered as "best effort" and in cases where it's not enough
++/// you should inspect the generated binary to verify that you got a desired
++/// codegen.
++#[inline(never)]
++pub fn zeroize_stack<const N: usize>() {
++    let buf = [0u8; N];
++    crate::optimization_barrier(&buf);
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/x86.rs /tmp/zeroize-maturin-zos/src/x86.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/src/x86.rs	2006-07-23 21:21:28.000000000 -0400
++++ /tmp/zeroize-maturin-zos/src/x86.rs	2026-08-14 23:42:00.420640297 -0400
+@@ -1,10 +1,9 @@
+ //! [`Zeroize`] impls for x86 SIMD registers
+ 
+-use crate::{atomic_fence, volatile_write, Zeroize};
++use crate::{Zeroize, optimization_barrier, volatile_write};
+ 
+ #[cfg(target_arch = "x86")]
+ use core::arch::x86::*;
+-
+ #[cfg(target_arch = "x86_64")]
+ use core::arch::x86_64::*;
+ 
+@@ -15,15 +14,13 @@
+                 #[inline]
+                 fn zeroize(&mut self) {
+                     volatile_write(self, unsafe { core::mem::zeroed() });
+-                    atomic_fence();
++                    optimization_barrier(self);
+                 }
+             }
+         )*
+     };
+ }
+ 
+-impl_zeroize_for_simd_register!(__m128, __m128d, __m128i, __m256, __m256d, __m256i);
+-
+-// NOTE: MSRV 1.72
+-#[cfg(feature = "simd")]
+-impl_zeroize_for_simd_register!(__m512, __m512d, __m512i);
++impl_zeroize_for_simd_register!(
++    __m128, __m128d, __m128i, __m256, __m256d, __m256i, __m512, __m512d, __m512i
++);
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.lock /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.lock
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.lock	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.lock	1969-12-31 19:00:01.000000000 -0500
+@@ -0,0 +1,77 @@
++# This file is automatically @generated by Cargo.
++# It is not intended for manual editing.
++version = 3
++
++[[package]]
++name = "proc-macro2"
++version = "1.0.80"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "a56dea16b0a29e94408b9aa5e2940a4eedbd128a1ba20e8f7ae60fd3d465af0e"
++dependencies = [
++ "unicode-ident",
++]
++
++[[package]]
++name = "quote"
++version = "1.0.35"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "291ec9ab5efd934aaf503a6466c5d5251535d108ee747472c3977cc5acc868ef"
++dependencies = [
++ "proc-macro2",
++]
++
++[[package]]
++name = "serde"
++version = "1.0.197"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3fb1c873e1b9b056a4dc4c0c198b24c3ffa059243875552b2bd0933b1aee4ce2"
++dependencies = [
++ "serde_derive",
++]
++
++[[package]]
++name = "serde_derive"
++version = "1.0.197"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "7eb0b34b42edc17f6b7cac84a52a1c5f0e1bb2227e997ca9011ea3dd34e8610b"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn",
++]
++
++[[package]]
++name = "syn"
++version = "2.0.59"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "4a6531ffc7b071655e4ce2e04bd464c4830bb585a61cabb96cf808f05172615a"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "unicode-ident",
++]
++
++[[package]]
++name = "unicode-ident"
++version = "1.0.12"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b"
++
++[[package]]
++name = "zeroize"
++version = "1.8.2"
++dependencies = [
++ "serde",
++ "zeroize_derive",
++]
++
++[[package]]
++name = "zeroize_derive"
++version = "1.4.2"
++source = "registry+https://github.com/rust-lang/crates.io-index"
++checksum = "ce36e65b0d2999d2aafac989fb249189a141aee1f53c612c1f37d72631959f69"
++dependencies = [
++ "proc-macro2",
++ "quote",
++ "syn",
++]
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.toml /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.toml
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.toml	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.toml	1969-12-31 19:00:01.000000000 -0500
+@@ -0,0 +1,83 @@
++# THIS FILE IS AUTOMATICALLY GENERATED BY CARGO
++#
++# When uploading crates to the registry Cargo will automatically
++# "normalize" Cargo.toml files for maximal compatibility
++# with all versions of Cargo and also rewrite `path` dependencies
++# to registry (e.g., crates.io) dependencies.
++#
++# If you are reading this file be aware that the original Cargo.toml
++# will likely look very different (and much more reasonable).
++# See Cargo.toml.orig for the original contents.
++
++[package]
++edition = "2021"
++rust-version = "1.60"
++name = "zeroize"
++version = "1.8.2"
++authors = ["The RustCrypto Project Developers"]
++build = false
++autolib = false
++autobins = false
++autoexamples = false
++autotests = false
++autobenches = false
++description = """
++Securely clear secrets from memory with a simple trait built on
++stable Rust primitives which guarantee memory is zeroed using an
++operation will not be 'optimized away' by the compiler.
++Uses a portable pure Rust implementation that works everywhere,
++even WASM!
++"""
++homepage = "https://github.com/RustCrypto/utils/tree/master/zeroize"
++readme = "README.md"
++keywords = [
++    "memory",
++    "memset",
++    "secure",
++    "volatile",
++    "zero",
++]
++categories = [
++    "cryptography",
++    "memory-management",
++    "no-std",
++    "os",
++]
++license = "Apache-2.0 OR MIT"
++repository = "https://github.com/RustCrypto/utils"
++
++[package.metadata.docs.rs]
++all-features = true
++rustdoc-args = [
++    "--cfg",
++    "docsrs",
++]
++
++[features]
++aarch64 = []
++alloc = []
++default = ["alloc"]
++derive = ["zeroize_derive"]
++simd = []
++std = ["alloc"]
++
++[lib]
++name = "zeroize"
++path = "src/lib.rs"
++
++[[test]]
++name = "zeroize"
++path = "tests/zeroize.rs"
++
++[[test]]
++name = "zeroize_derive"
++path = "tests/zeroize_derive.rs"
++
++[dependencies.serde]
++version = "1.0"
++optional = true
++default-features = false
++
++[dependencies.zeroize_derive]
++version = "1.3"
++optional = true
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.toml.orig /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.toml.orig
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/Cargo.toml.orig	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/Cargo.toml.orig	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,36 @@
++[package]
++name = "zeroize"
++version = "1.8.2"
++description = """
++Securely clear secrets from memory with a simple trait built on
++stable Rust primitives which guarantee memory is zeroed using an
++operation will not be 'optimized away' by the compiler.
++Uses a portable pure Rust implementation that works everywhere,
++even WASM!
++"""
++authors = ["The RustCrypto Project Developers"]
++license = "Apache-2.0 OR MIT"
++homepage = "https://github.com/RustCrypto/utils/tree/master/zeroize"
++repository = "https://github.com/RustCrypto/utils"
++readme = "README.md"
++categories = ["cryptography", "memory-management", "no-std", "os"]
++keywords = ["memory", "memset", "secure", "volatile", "zero"]
++edition = "2021"
++rust-version = "1.60"
++
++[dependencies]
++serde = { version = "1.0", default-features = false, optional = true }
++zeroize_derive = { version = "1.3", path = "../zeroize_derive", optional = true }
++
++[features]
++default = ["alloc"]
++alloc = []
++std = ["alloc"]
++
++aarch64 = [] # NOTE: vestigial no-op feature; AArch64 support is always enabled now
++derive = ["zeroize_derive"]
++simd = [] # NOTE: MSRV 1.72
++
++[package.metadata.docs.rs]
++all-features = true
++rustdoc-args = ["--cfg", "docsrs"]
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/.cargo_vcs_info.json /tmp/zeroize-maturin-zos/zeroize-1.8.2/.cargo_vcs_info.json
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/.cargo_vcs_info.json	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/.cargo_vcs_info.json	1969-12-31 19:00:01.000000000 -0500
+@@ -0,0 +1,6 @@
++{
++  "git": {
++    "sha1": "c100874101bfd584870de5dde1b13dd92a17bf48"
++  },
++  "path_in_vcs": "zeroize"
++}
+\ No newline at end of file
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/CHANGELOG.md /tmp/zeroize-maturin-zos/zeroize-1.8.2/CHANGELOG.md
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/CHANGELOG.md	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/CHANGELOG.md	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,275 @@
++# Changelog
++All notable changes to this project will be documented in this file.
++
++The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
++and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
++
++## 1.8.2 (2025-09-29)
++### Changed
++- Switch from `doc_auto_cfg` to `doc_cfg` ([#1228])
++
++[#1228]: https://github.com/RustCrypto/utils/pull/1228
++
++## 1.8.1 (2024-05-25)
++### Changed
++- Feature-gate AVX-512 support under `simd`; restores MSRV 1.60 ([#1073])
++
++[#1073]: https://github.com/RustCrypto/utils/pull/1073
++
++## 1.8.0 (2024-04-24) [YANKED]
++
++NOTE: yanked due concerns over the MSRV bump. See [#1067].
++
++### Added
++- Unsafe `zeroize_flat_type` function ([#1045])
++- `Zeroize` impls for `__m512` types on `x86`/`x86_64` targets ([#1052])
++
++### Changed
++- Bump MSRV to 1.72 ([#1052])
++- Always enable AArch64 support ([#1064])
++
++### Fixed
++- Nightly warnings ([#1055])
++
++[#1045]: https://github.com/RustCrypto/utils/pull/1045
++[#1052]: https://github.com/RustCrypto/utils/pull/1052
++[#1055]: https://github.com/RustCrypto/utils/pull/1055
++[#1064]: https://github.com/RustCrypto/utils/pull/1064
++[#1067]: https://github.com/RustCrypto/utils/pull/1067
++
++## 1.7.0 (2023-11-16)
++### Changed
++- Bump MSRV to 1.60 ([#900])
++
++## 1.6.1 (2023-11-15) [YANKED]
++
++NOTE: yanked because [#900] bumped MSRV to 1.60, which vioates our MSRV policy.
++
++### Added
++- Impl `Zeroize` for `MaybeUninit` ([#900])
++
++### Removed
++- Unnecessary `cfg`s on SIMD type impls ([#930])
++
++[#900]: https://github.com/RustCrypto/utils/pull/900
++[#930]: https://github.com/RustCrypto/utils/pull/930
++
++## 1.6.0 (2023-03-26)
++### Added
++- Impl `Zeroize` for `core::num::Wrapping` ([#818])
++- Impl `Zeroize` for `str` and `Box<str>` ([#842])
++
++### Changed
++- 2021 edition upgrade; MSRV 1.56 ([#869])
++
++[#818]: https://github.com/RustCrypto/utils/pull/818
++[#842]: https://github.com/RustCrypto/utils/pull/842
++[#869]: https://github.com/RustCrypto/utils/pull/869
++
++## 1.5.7 (2022-07-20)
++### Added
++- Optional `serde` support ([#780])
++
++[#780]: https://github.com/RustCrypto/utils/pull/780
++
++## 1.5.6 (2022-06-29)
++### Added
++- `#[inline(always)]` annotations ([#772])
++- `#[ignore]` attribute on flaky CString test ([#776])
++
++### Changed
++- Factor integration tests into `tests/` ([#771])
++
++[#771]: https://github.com/RustCrypto/utils/pull/771
++[#772]: https://github.com/RustCrypto/utils/pull/772
++[#776]: https://github.com/RustCrypto/utils/pull/776
++
++## 1.5.5 (2022-04-30)
++### Added
++- Impl `Zeroize` for std::ffi::CString ([#759])
++- `AsRef<T>` and `AsMut<T>` impls for `Zeroizing` ([#761])
++
++[#759]: https://github.com/RustCrypto/utils/pull/759
++[#761]: https://github.com/RustCrypto/utils/pull/761
++
++## 1.5.4 (2022-03-16)
++### Added
++- Nightly-only upport for zeroizing ARM64 SIMD registers ([#749])
++
++[#749]: https://github.com/RustCrypto/utils/pull/749
++
++## 1.5.3 (2022-02-25)
++### Fixed
++- Deriving `ZeroizeOnDrop` on `DerefMut` ([#739])
++
++[#739]: https://github.com/RustCrypto/utils/pull/739
++
++## 1.5.2 (2022-01-31) [YANKED]
++### Fixed
++- Ambiguous method for `AssertZeroizeOnDrop` ([#725])
++
++[#725]: https://github.com/RustCrypto/utils/pull/725
++
++## 1.5.1 (2022-01-27) [YANKED]
++### Fixed
++- Double `mut` on `AssertZeroizeOnDrop` ([#719])
++
++[#719]: https://github.com/RustCrypto/utils/pull/719
++
++## 1.5.0 (2022-01-14) [YANKED]
++### Added
++- `Zeroize` impls for `PhantomData`, `PhantomPinned`, and tuples with 0-10 elements ([#660])
++- `#[zeroize(bound = "T: MyTrait")]` ([#663])
++- `ZeroizeOnDrop` trait and custom derive ([#699], [#700], [#703])
++
++[#660]: https://github.com/RustCrypto/utils/pull/660
++[#663]: https://github.com/RustCrypto/utils/pull/663
++[#699]: https://github.com/RustCrypto/utils/pull/699
++[#700]: https://github.com/RustCrypto/utils/pull/700
++[#703]: https://github.com/RustCrypto/utils/pull/703
++
++## 1.4.3 (2021-11-04)
++### Added
++- Implement `Zeroize` for `NonZeroX`
++
++### Changed
++- Moved to `RustCrypto/utils` repository
++
++## 1.4.2 (2021-09-21)
++### Added
++- Derive `Default` on `Zeroizing`
++
++## 1.4.1 (2021-07-20)
++### Added
++- Implement Zeroize for `[MaybeUninit<Z>]`
++
++## 1.4.0 (2021-07-18)
++NOTE: This release includes an MSRV bump to Rust 1.51. Please use `zeroize = "1.3.0"`
++if you would like to support older Rust versions.
++
++### Added
++- Use const generics to impl `Zeroize` for `[Z; N]`; MSRV 1.51
++- `Zeroizing::clone_from` now zeroizes the destination before cloning
++
++## 1.3.0 (2021-04-19)
++### Added
++- impl `Zeroize` for `Box<[Z]>`
++- Clear residual space within `Option
++
++### Changed
++- Ensure `Option` is `None` when zeroized
++- Bump MSRV to 1.47
++
++## 1.2.0 (2020-12-09)
++### Added
++- `Zeroize` support for x86(_64) SIMD registers
++
++### Changed
++- Simplify `String::zeroize`
++- MSRV 1.44+
++
++## 1.1.1 (2020-09-15)
++- Add `doc_cfg`
++- zeroize entire capacity of `String`
++- zeroize entire capacity of `Vec`
++
++## 1.1.0 (2019-12-02)
++- Add `TryZeroize` trait
++- Add `From<Z: Zeroize>` impl for `Zeroizing<Z>`
++- Remove `bytes-preview` feature
++
++## 1.0.0 (2019-10-13)
++- Initial 1.0 release 🎉
++- zeroize_derive: Remove legacy `no_drop` attribute support
++- Rename `bytes` feature to `bytes-preview`
++- Further relax `Zeroize` trait bounds for `Vec`
++- Derive `Clone`, `Debug`, and `Eq` for `Zeroizing`
++
++## 1.0.0-pre (2019-09-30)
++- Loosen `Vec` trait bounds for `Zeroize`
++
++## 0.10.1 (2019-09-03)
++- (Optionally) Impl `Zeroize` for `Bytes` and `BytesMut`
++
++## 0.10.0 (2019-08-19)
++Barring unforeseen circumstances, this release aims to be the last `0.x`
++release prior to a `zeroize` 1.0 release.
++
++- Disable `zeroize_derive` Cargo feature by default
++- Remove `std` feature in favor of `alloc`; MSRV 1.36+
++- Deprecate `#[zeroize(no_drop)]` attribute
++- Use 1.0 `proc-macro2`, `quote`, and `syn` crates
++
++## 0.9.3 (2019-07-27)
++- Improved attribute parser; fixes nightly build
++
++## 0.9.2 (2019-06-28)
++- README.md: add Gitter badges; update image links
++
++## 0.9.1 (2019-06-04)
++- Impl `Zeroize` for `Option<Z: Zeroize>`
++
++## 0.9.0 (2019-06-04)
++**NOTICE**: This release changes the default behavior of `derive(Zeroize)`
++to no longer derive a `Drop` impl. If you wish to derive `Drop`, you must
++now explicitly add a `#[zeroize(drop)]` attribute on the type for which you
++are deriving `Zeroize`.
++
++- Remove CPU fences
++- Remove scary language about undefined behavior
++- Bound blanket array impls on `Zeroize` instead of `DefaultIsZeroes`
++- Require `zeroize(drop)` or `zeroize(no_drop)` attributes when deriving
++  `Zeroize` .
++- Support stablized 'alloc' crate
++
++## 0.8.0 (2019-05-20)
++- Impl `Drop` by default when deriving `Zeroize`
++
++## 0.7.0 (2019-05-19)
++- Use synstructure for custom derive
++- Add explicit array impls for `DefaultIsZeroes`
++- Remove `nightly` feature
++- Add `Zeroizing<Z>` to zeroize values on drop
++
++## 0.6.0 (2019-03-23)
++- Add ZeroizeOnDrop marker trait + custom derive
++- Custom derive support for `Zeroize`
++- Rename `ZeroizeWithDefault` to `DefaultIsZeroes`
++
++## 0.5.2 (2018-12-25)
++- Add `debug_assert!` to ensure string interiors are zeroized
++
++## 0.5.1 (2018-12-24)
++- Avoid re-exporting the whole prelude
++
++## 0.5.0 (2018-12-24)
++This release is a rewrite which replaces FFI bindings to OS-specific APIs with
++a pure Rust solution.
++
++- Use `core::sync::atomic` fences
++- Test wasm target
++- Rewrite using `core::ptr::write_volatile`
++
++## 0.4.2 (2018-10-12)
++- Fix ldd scraper for older glibc versions
++
++## 0.4.1 (2018-10-12)
++- Support musl-libc
++
++## 0.4.0 (2018-10-12)
++- Impl `Zeroize` trait on concrete types
++
++## 0.3.0 (2018-10-11)
++- Replace `secure_zero_memory` with `Zeroize`
++
++## 0.2.0 (2018-10-11)
++- Add `Zeroize` trait
++
++## 0.1.2 (2018-10-03)
++- README.md: Fix intrinsic links
++
++## 0.1.1 (2018-10-03)
++- Documentation improvements
++
++## 0.1.0 (2018-10-03)
++- Initial release
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/LICENSE-APACHE /tmp/zeroize-maturin-zos/zeroize-1.8.2/LICENSE-APACHE
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/LICENSE-APACHE	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/LICENSE-APACHE	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,202 @@
++
++                                 Apache License
++                           Version 2.0, January 2004
++                        http://www.apache.org/licenses/
++
++   TERMS AND CONDITIONS FOR USE, REPRODUCTION, AND DISTRIBUTION
++
++   1. Definitions.
++
++      "License" shall mean the terms and conditions for use, reproduction,
++      and distribution as defined by Sections 1 through 9 of this document.
++
++      "Licensor" shall mean the copyright owner or entity authorized by
++      the copyright owner that is granting the License.
++
++      "Legal Entity" shall mean the union of the acting entity and all
++      other entities that control, are controlled by, or are under common
++      control with that entity. For the purposes of this definition,
++      "control" means (i) the power, direct or indirect, to cause the
++      direction or management of such entity, whether by contract or
++      otherwise, or (ii) ownership of fifty percent (50%) or more of the
++      outstanding shares, or (iii) beneficial ownership of such entity.
++
++      "You" (or "Your") shall mean an individual or Legal Entity
++      exercising permissions granted by this License.
++
++      "Source" form shall mean the preferred form for making modifications,
++      including but not limited to software source code, documentation
++      source, and configuration files.
++
++      "Object" form shall mean any form resulting from mechanical
++      transformation or translation of a Source form, including but
++      not limited to compiled object code, generated documentation,
++      and conversions to other media types.
++
++      "Work" shall mean the work of authorship, whether in Source or
++      Object form, made available under the License, as indicated by a
++      copyright notice that is included in or attached to the work
++      (an example is provided in the Appendix below).
++
++      "Derivative Works" shall mean any work, whether in Source or Object
++      form, that is based on (or derived from) the Work and for which the
++      editorial revisions, annotations, elaborations, or other modifications
++      represent, as a whole, an original work of authorship. For the purposes
++      of this License, Derivative Works shall not include works that remain
++      separable from, or merely link (or bind by name) to the interfaces of,
++      the Work and Derivative Works thereof.
++
++      "Contribution" shall mean any work of authorship, including
++      the original version of the Work and any modifications or additions
++      to that Work or Derivative Works thereof, that is intentionally
++      submitted to Licensor for inclusion in the Work by the copyright owner
++      or by an individual or Legal Entity authorized to submit on behalf of
++      the copyright owner. For the purposes of this definition, "submitted"
++      means any form of electronic, verbal, or written communication sent
++      to the Licensor or its representatives, including but not limited to
++      communication on electronic mailing lists, source code control systems,
++      and issue tracking systems that are managed by, or on behalf of, the
++      Licensor for the purpose of discussing and improving the Work, but
++      excluding communication that is conspicuously marked or otherwise
++      designated in writing by the copyright owner as "Not a Contribution."
++
++      "Contributor" shall mean Licensor and any individual or Legal Entity
++      on behalf of whom a Contribution has been received by Licensor and
++      subsequently incorporated within the Work.
++
++   2. Grant of Copyright License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      copyright license to reproduce, prepare Derivative Works of,
++      publicly display, publicly perform, sublicense, and distribute the
++      Work and such Derivative Works in Source or Object form.
++
++   3. Grant of Patent License. Subject to the terms and conditions of
++      this License, each Contributor hereby grants to You a perpetual,
++      worldwide, non-exclusive, no-charge, royalty-free, irrevocable
++      (except as stated in this section) patent license to make, have made,
++      use, offer to sell, sell, import, and otherwise transfer the Work,
++      where such license applies only to those patent claims licensable
++      by such Contributor that are necessarily infringed by their
++      Contribution(s) alone or by combination of their Contribution(s)
++      with the Work to which such Contribution(s) was submitted. If You
++      institute patent litigation against any entity (including a
++      cross-claim or counterclaim in a lawsuit) alleging that the Work
++      or a Contribution incorporated within the Work constitutes direct
++      or contributory patent infringement, then any patent licenses
++      granted to You under this License for that Work shall terminate
++      as of the date such litigation is filed.
++
++   4. Redistribution. You may reproduce and distribute copies of the
++      Work or Derivative Works thereof in any medium, with or without
++      modifications, and in Source or Object form, provided that You
++      meet the following conditions:
++
++      (a) You must give any other recipients of the Work or
++          Derivative Works a copy of this License; and
++
++      (b) You must cause any modified files to carry prominent notices
++          stating that You changed the files; and
++
++      (c) You must retain, in the Source form of any Derivative Works
++          that You distribute, all copyright, patent, trademark, and
++          attribution notices from the Source form of the Work,
++          excluding those notices that do not pertain to any part of
++          the Derivative Works; and
++
++      (d) If the Work includes a "NOTICE" text file as part of its
++          distribution, then any Derivative Works that You distribute must
++          include a readable copy of the attribution notices contained
++          within such NOTICE file, excluding those notices that do not
++          pertain to any part of the Derivative Works, in at least one
++          of the following places: within a NOTICE text file distributed
++          as part of the Derivative Works; within the Source form or
++          documentation, if provided along with the Derivative Works; or,
++          within a display generated by the Derivative Works, if and
++          wherever such third-party notices normally appear. The contents
++          of the NOTICE file are for informational purposes only and
++          do not modify the License. You may add Your own attribution
++          notices within Derivative Works that You distribute, alongside
++          or as an addendum to the NOTICE text from the Work, provided
++          that such additional attribution notices cannot be construed
++          as modifying the License.
++
++      You may add Your own copyright statement to Your modifications and
++      may provide additional or different license terms and conditions
++      for use, reproduction, or distribution of Your modifications, or
++      for any such Derivative Works as a whole, provided Your use,
++      reproduction, and distribution of the Work otherwise complies with
++      the conditions stated in this License.
++
++   5. Submission of Contributions. Unless You explicitly state otherwise,
++      any Contribution intentionally submitted for inclusion in the Work
++      by You to the Licensor shall be under the terms and conditions of
++      this License, without any additional terms or conditions.
++      Notwithstanding the above, nothing herein shall supersede or modify
++      the terms of any separate license agreement you may have executed
++      with Licensor regarding such Contributions.
++
++   6. Trademarks. This License does not grant permission to use the trade
++      names, trademarks, service marks, or product names of the Licensor,
++      except as required for reasonable and customary use in describing the
++      origin of the Work and reproducing the content of the NOTICE file.
++
++   7. Disclaimer of Warranty. Unless required by applicable law or
++      agreed to in writing, Licensor provides the Work (and each
++      Contributor provides its Contributions) on an "AS IS" BASIS,
++      WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or
++      implied, including, without limitation, any warranties or conditions
++      of TITLE, NON-INFRINGEMENT, MERCHANTABILITY, or FITNESS FOR A
++      PARTICULAR PURPOSE. You are solely responsible for determining the
++      appropriateness of using or redistributing the Work and assume any
++      risks associated with Your exercise of permissions under this License.
++
++   8. Limitation of Liability. In no event and under no legal theory,
++      whether in tort (including negligence), contract, or otherwise,
++      unless required by applicable law (such as deliberate and grossly
++      negligent acts) or agreed to in writing, shall any Contributor be
++      liable to You for damages, including any direct, indirect, special,
++      incidental, or consequential damages of any character arising as a
++      result of this License or out of the use or inability to use the
++      Work (including but not limited to damages for loss of goodwill,
++      work stoppage, computer failure or malfunction, or any and all
++      other commercial damages or losses), even if such Contributor
++      has been advised of the possibility of such damages.
++
++   9. Accepting Warranty or Additional Liability. While redistributing
++      the Work or Derivative Works thereof, You may choose to offer,
++      and charge a fee for, acceptance of support, warranty, indemnity,
++      or other liability obligations and/or rights consistent with this
++      License. However, in accepting such obligations, You may act only
++      on Your own behalf and on Your sole responsibility, not on behalf
++      of any other Contributor, and only if You agree to indemnify,
++      defend, and hold each Contributor harmless for any liability
++      incurred by, or claims asserted against, such Contributor by reason
++      of your accepting any such warranty or additional liability.
++
++   END OF TERMS AND CONDITIONS
++
++   APPENDIX: How to apply the Apache License to your work.
++
++      To apply the Apache License to your work, attach the following
++      boilerplate notice, with the fields enclosed by brackets "[]"
++      replaced with your own identifying information. (Don't include
++      the brackets!)  The text should be enclosed in the appropriate
++      comment syntax for the file format. We also recommend that a
++      file or class name and description of purpose be included on the
++      same "printed page" as the copyright notice for easier
++      identification within third-party archives.
++
++   Copyright [yyyy] [name of copyright owner]
++
++   Licensed under the Apache License, Version 2.0 (the "License");
++   you may not use this file except in compliance with the License.
++   You may obtain a copy of the License at
++
++       http://www.apache.org/licenses/LICENSE-2.0
++
++   Unless required by applicable law or agreed to in writing, software
++   distributed under the License is distributed on an "AS IS" BASIS,
++   WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
++   See the License for the specific language governing permissions and
++   limitations under the License.
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/LICENSE-MIT /tmp/zeroize-maturin-zos/zeroize-1.8.2/LICENSE-MIT
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/LICENSE-MIT	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/LICENSE-MIT	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,21 @@
++MIT License
++
++Copyright (c) 2018-2021 The RustCrypto Project Developers
++
++Permission is hereby granted, free of charge, to any person obtaining a copy
++of this software and associated documentation files (the "Software"), to deal
++in the Software without restriction, including without limitation the rights
++to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
++copies of the Software, and to permit persons to whom the Software is
++furnished to do so, subject to the following conditions:
++
++The above copyright notice and this permission notice shall be included in all
++copies or substantial portions of the Software.
++
++THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
++IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
++FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
++AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
++LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
++OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
++SOFTWARE.
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/README.md /tmp/zeroize-maturin-zos/zeroize-1.8.2/README.md
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/README.md	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/README.md	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,80 @@
++# [RustCrypto]: zeroize
++
++[![Crate][crate-image]][crate-link]
++[![Docs][docs-image]][docs-link]
++![Apache 2.0/MIT Licensed][license-image]
++![MSRV][rustc-image]
++[![Build Status][build-image]][build-link]
++
++Securely zero memory (a.k.a. [zeroize]) while avoiding compiler optimizations.
++
++This crate implements a portable approach to securely zeroing memory using
++techniques which guarantee they won't be "optimized away" by the compiler.
++
++The [`Zeroize` trait] is the crate's primary API.
++
++[Documentation]
++
++## About
++
++[Zeroing memory securely is hard] - compilers optimize for performance, and
++in doing so they love to "optimize away" unnecessary zeroing calls. There are
++many documented "tricks" to attempt to avoid these optimizations and ensure
++that a zeroing routine is performed reliably.
++
++This crate isn't about tricks: it uses [core::ptr::write_volatile]
++and [core::sync::atomic] memory fences to provide easy-to-use, portable
++zeroing behavior which works on all of Rust's core number types and slices
++thereof, implemented in pure Rust with no usage of FFI or assembly.
++
++- No insecure fallbacks!
++- No dependencies!
++- No FFI or inline assembly! **WASM friendly** (and tested)!
++- `#![no_std]` i.e. **embedded-friendly**!
++- No functionality besides securely zeroing memory!
++- (Optional) Custom derive support for zeroing complex structures
++
++## Minimum Supported Rust Version
++
++Rust **1.60** or newer.
++
++In the future, we reserve the right to change MSRV (i.e. MSRV is out-of-scope
++for this crate's SemVer guarantees), however when we do it will be accompanied by
++a minor version bump.
++
++## License
++
++Licensed under either of:
++
++* [Apache License, Version 2.0](http://www.apache.org/licenses/LICENSE-2.0)
++* [MIT license](http://opensource.org/licenses/MIT)
++
++at your option.
++
++### Contribution
++
++Unless you explicitly state otherwise, any contribution intentionally submitted
++for inclusion in the work by you, as defined in the Apache-2.0 license, shall be
++dual licensed as above, without any additional terms or conditions.
++
++[//]: # (badges)
++
++[crate-image]: https://img.shields.io/crates/v/zeroize.svg
++[crate-link]: https://crates.io/crates/zeroize
++[docs-image]: https://docs.rs/zeroize/badge.svg
++[docs-link]: https://docs.rs/zeroize/
++[license-image]: https://img.shields.io/badge/license-Apache2.0/MIT-blue.svg
++[rustc-image]: https://img.shields.io/badge/rustc-1.60+-blue.svg
++[build-image]: https://github.com/RustCrypto/utils/actions/workflows/zeroize.yml/badge.svg
++[build-link]: https://github.com/RustCrypto/utils/actions/workflows/zeroize.yml
++
++[//]: # (general links)
++
++[RustCrypto]: https://github.com/RustCrypto
++[zeroize]: https://en.wikipedia.org/wiki/Zeroisation
++[`Zeroize` trait]: https://docs.rs/zeroize/latest/zeroize/trait.Zeroize.html
++[Documentation]: https://docs.rs/zeroize/
++[Zeroing memory securely is hard]: http://www.daemonology.net/blog/2014-09-04-how-to-zero-a-buffer.html
++[core::ptr::write_volatile]: https://doc.rust-lang.org/core/ptr/fn.write_volatile.html
++[core::sync::atomic]: https://doc.rust-lang.org/stable/core/sync/atomic/index.html
++[good cryptographic hygiene]: https://github.com/veorq/cryptocoding#clean-memory-of-secret-data
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/aarch64.rs /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/aarch64.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/aarch64.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/aarch64.rs	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,31 @@
++//! [`Zeroize`] impls for ARM64 SIMD registers.
++
++use crate::{atomic_fence, volatile_write, Zeroize};
++
++use core::arch::aarch64::*;
++
++macro_rules! impl_zeroize_for_simd_register {
++    ($($type:ty),* $(,)?) => {
++        $(
++            impl Zeroize for $type {
++                #[inline]
++                fn zeroize(&mut self) {
++                    volatile_write(self, unsafe { core::mem::zeroed() });
++                    atomic_fence();
++                }
++            }
++        )+
++    };
++}
++
++// TODO(tarcieri): other NEON register types?
++impl_zeroize_for_simd_register! {
++    uint8x8_t,
++    uint8x16_t,
++    uint16x4_t,
++    uint16x8_t,
++    uint32x2_t,
++    uint32x4_t,
++    uint64x1_t,
++    uint64x2_t,
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/lib.rs /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/lib.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/lib.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/lib.rs	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,875 @@
++#![no_std]
++#![cfg_attr(docsrs, feature(doc_cfg))]
++#![doc(
++    html_logo_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg",
++    html_favicon_url = "https://raw.githubusercontent.com/RustCrypto/media/6ee8e381/logo.svg"
++)]
++#![warn(missing_docs, rust_2018_idioms, unused_qualifications)]
++
++//! Securely zero memory with a simple trait ([`Zeroize`]) built on stable Rust
++//! primitives which guarantee the operation will not be "optimized away".
++//!
++//! ## About
++//!
++//! [Zeroing memory securely is hard] - compilers optimize for performance, and
++//! in doing so they love to "optimize away" unnecessary zeroing calls. There are
++//! many documented "tricks" to attempt to avoid these optimizations and ensure
++//! that a zeroing routine is performed reliably.
++//!
++//! This crate isn't about tricks: it uses [`core::ptr::write_volatile`]
++//! and [`core::sync::atomic`] memory fences to provide easy-to-use, portable
++//! zeroing behavior which works on all of Rust's core number types and slices
++//! thereof, implemented in pure Rust with no usage of FFI or assembly.
++//!
++//! - No insecure fallbacks!
++//! - No dependencies!
++//! - No FFI or inline assembly! **WASM friendly** (and tested)!
++//! - `#![no_std]` i.e. **embedded-friendly**!
++//! - No functionality besides securely zeroing memory!
++//! - (Optional) Custom derive support for zeroing complex structures
++//!
++//! ## Minimum Supported Rust Version
++//!
++//! Requires Rust **1.72** or newer.
++//!
++//! In the future, we reserve the right to change MSRV (i.e. MSRV is out-of-scope
++//! for this crate's SemVer guarantees), however when we do it will be accompanied
++//! by a minor version bump.
++//!
++//! ## Usage
++//!
++//! ```
++//! use zeroize::Zeroize;
++//!
++//! // Protip: don't embed secrets in your source code.
++//! // This is just an example.
++//! let mut secret = b"Air shield password: 1,2,3,4,5".to_vec();
++//! // [ ... ] open the air shield here
++//!
++//! // Now that we're done using the secret, zero it out.
++//! secret.zeroize();
++//! ```
++//!
++//! The [`Zeroize`] trait is impl'd on all of Rust's core scalar types including
++//! integers, floats, `bool`, and `char`.
++//!
++//! Additionally, it's implemented on slices and `IterMut`s of the above types.
++//!
++//! When the `alloc` feature is enabled (which it is by default), it's also
++//! impl'd for `Vec<T>` for the above types as well as `String`, where it provides
++//! [`Vec::clear`] / [`String::clear`]-like behavior (truncating to zero-length)
++//! but ensures the backing memory is securely zeroed with some caveats.
++//!
++//! With the `std` feature enabled (which it is **not** by default), [`Zeroize`]
++//! is also implemented for [`CString`]. After calling `zeroize()` on a `CString`,
++//! its internal buffer will contain exactly one nul byte. The backing
++//! memory is zeroed by converting it to a `Vec<u8>` and back into a `CString`.
++//! (NOTE: see "Stack/Heap Zeroing Notes" for important `Vec`/`String`/`CString` details)
++//!
++//! [`CString`]: https://doc.rust-lang.org/std/ffi/struct.CString.html
++//!
++//! The [`DefaultIsZeroes`] marker trait can be impl'd on types which also
++//! impl [`Default`], which implements [`Zeroize`] by overwriting a value with
++//! the default value.
++//!
++//! ## Custom Derive Support
++//!
++//! This crate has custom derive support for the `Zeroize` trait,
++//! gated under the `zeroize` crate's `zeroize_derive` Cargo feature,
++//! which automatically calls `zeroize()` on all members of a struct
++//! or tuple struct.
++//!
++//! Attributes supported for `Zeroize`:
++//!
++//! On the item level:
++//! - `#[zeroize(drop)]`: *deprecated* use `ZeroizeOnDrop` instead
++//! - `#[zeroize(bound = "T: MyTrait")]`: this replaces any trait bounds
++//!   inferred by zeroize
++//!
++//! On the field level:
++//! - `#[zeroize(skip)]`: skips this field or variant when calling `zeroize()`
++//!
++//! Attributes supported for `ZeroizeOnDrop`:
++//!
++//! On the field level:
++//! - `#[zeroize(skip)]`: skips this field or variant when calling `zeroize()`
++//!
++//! Example which derives `Drop`:
++//!
++//! ```
++//! # #[cfg(feature = "zeroize_derive")]
++//! # {
++//! use zeroize::{Zeroize, ZeroizeOnDrop};
++//!
++//! // This struct will be zeroized on drop
++//! #[derive(Zeroize, ZeroizeOnDrop)]
++//! struct MyStruct([u8; 32]);
++//! # }
++//! ```
++//!
++//! Example which does not derive `Drop` (useful for e.g. `Copy` types)
++//!
++//! ```
++//! #[cfg(feature = "zeroize_derive")]
++//! # {
++//! use zeroize::Zeroize;
++//!
++//! // This struct will *NOT* be zeroized on drop
++//! #[derive(Copy, Clone, Zeroize)]
++//! struct MyStruct([u8; 32]);
++//! # }
++//! ```
++//!
++//! Example which only derives `Drop`:
++//!
++//! ```
++//! # #[cfg(feature = "zeroize_derive")]
++//! # {
++//! use zeroize::ZeroizeOnDrop;
++//!
++//! // This struct will be zeroized on drop
++//! #[derive(ZeroizeOnDrop)]
++//! struct MyStruct([u8; 32]);
++//! # }
++//! ```
++//!
++//! ## `Zeroizing<Z>`: wrapper for zeroizing arbitrary values on drop
++//!
++//! `Zeroizing<Z: Zeroize>` is a generic wrapper type that impls `Deref`
++//! and `DerefMut`, allowing access to an inner value of type `Z`, and also
++//! impls a `Drop` handler which calls `zeroize()` on its contents:
++//!
++//! ```
++//! use zeroize::Zeroizing;
++//!
++//! fn use_secret() {
++//!     let mut secret = Zeroizing::new([0u8; 5]);
++//!
++//!     // Set the air shield password
++//!     // Protip (again): don't embed secrets in your source code.
++//!     secret.copy_from_slice(&[1, 2, 3, 4, 5]);
++//!     assert_eq!(secret.as_ref(), &[1, 2, 3, 4, 5]);
++//!
++//!     // The contents of `secret` will be automatically zeroized on drop
++//! }
++//!
++//! # use_secret()
++//! ```
++//!
++//! ## What guarantees does this crate provide?
++//!
++//! This crate guarantees the following:
++//!
++//! 1. The zeroing operation can't be "optimized away" by the compiler.
++//! 2. All subsequent reads to memory will see "zeroized" values.
++//!
++//! LLVM's volatile semantics ensure #1 is true.
++//!
++//! Additionally, thanks to work by the [Unsafe Code Guidelines Working Group],
++//! we can now fairly confidently say #2 is true as well. Previously there were
++//! worries that the approach used by this crate (mixing volatile and
++//! non-volatile accesses) was undefined behavior due to language contained
++//! in the documentation for `write_volatile`, however after some discussion
++//! [these remarks have been removed] and the specific usage pattern in this
++//! crate is considered to be well-defined.
++//!
++//! Additionally this crate leverages [`core::sync::atomic::compiler_fence`]
++//! with the strictest ordering
++//! ([`Ordering::SeqCst`]) as a
++//! precaution to help ensure reads are not reordered before memory has been
++//! zeroed.
++//!
++//! All of that said, there is still potential for microarchitectural attacks
++//! (ala Spectre/Meltdown) to leak "zeroized" secrets through covert channels.
++//! This crate makes no guarantees that zeroized values cannot be leaked
++//! through such channels, as they represent flaws in the underlying hardware.
++//!
++//! ## Stack/Heap Zeroing Notes
++//!
++//! This crate can be used to zero values from either the stack or the heap.
++//!
++//! However, be aware several operations in Rust can unintentionally leave
++//! copies of data in memory. This includes but is not limited to:
++//!
++//! - Moves and [`Copy`]
++//! - Heap reallocation when using [`Vec`] and [`String`]
++//! - Borrowers of a reference making copies of the data
++//!
++//! [`Pin`][`core::pin::Pin`] can be leveraged in conjunction with this crate
++//! to ensure data kept on the stack isn't moved.
++//!
++//! The `Zeroize` impls for `Vec`, `String` and `CString` zeroize the entire
++//! capacity of their backing buffer, but cannot guarantee copies of the data
++//! were not previously made by buffer reallocation. It's therefore important
++//! when attempting to zeroize such buffers to initialize them to the correct
++//! capacity, and take care to prevent subsequent reallocation.
++//!
++//! The `secrecy` crate provides higher-level abstractions for eliminating
++//! usage patterns which can cause reallocations:
++//!
++//! <https://crates.io/crates/secrecy>
++//!
++//! ## What about: clearing registers, mlock, mprotect, etc?
++//!
++//! This crate is focused on providing simple, unobtrusive support for reliably
++//! zeroing memory using the best approach possible on stable Rust.
++//!
++//! Clearing registers is a difficult problem that can't easily be solved by
++//! something like a crate, and requires either inline ASM or rustc support.
++//! See <https://github.com/rust-lang/rust/issues/17046> for background on
++//! this particular problem.
++//!
++//! Other memory protection mechanisms are interesting and useful, but often
++//! overkill (e.g. defending against RAM scraping or attackers with swap access).
++//! In as much as there may be merit to these approaches, there are also many
++//! other crates that already implement more sophisticated memory protections.
++//! Such protections are explicitly out-of-scope for this crate.
++//!
++//! Zeroing memory is [good cryptographic hygiene] and this crate seeks to promote
++//! it in the most unobtrusive manner possible. This includes omitting complex
++//! `unsafe` memory protection systems and just trying to make the best memory
++//! zeroing crate available.
++//!
++//! [Zeroing memory securely is hard]: http://www.daemonology.net/blog/2014-09-04-how-to-zero-a-buffer.html
++//! [Unsafe Code Guidelines Working Group]: https://github.com/rust-lang/unsafe-code-guidelines
++//! [these remarks have been removed]: https://github.com/rust-lang/rust/pull/60972
++//! [good cryptographic hygiene]: https://github.com/veorq/cryptocoding#clean-memory-of-secret-data
++//! [`Ordering::SeqCst`]: core::sync::atomic::Ordering::SeqCst
++
++#[cfg(feature = "alloc")]
++extern crate alloc;
++
++#[cfg(feature = "std")]
++extern crate std;
++
++#[cfg(feature = "zeroize_derive")]
++pub use zeroize_derive::{Zeroize, ZeroizeOnDrop};
++
++#[cfg(target_arch = "aarch64")]
++mod aarch64;
++#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
++mod x86;
++
++use core::{
++    marker::{PhantomData, PhantomPinned},
++    mem::{size_of, MaybeUninit},
++    num::{
++        self, NonZeroI128, NonZeroI16, NonZeroI32, NonZeroI64, NonZeroI8, NonZeroIsize,
++        NonZeroU128, NonZeroU16, NonZeroU32, NonZeroU64, NonZeroU8, NonZeroUsize,
++    },
++    ops, ptr,
++    slice::IterMut,
++    sync::atomic,
++};
++
++#[cfg(feature = "alloc")]
++use alloc::{boxed::Box, string::String, vec::Vec};
++
++#[cfg(feature = "std")]
++use std::ffi::CString;
++
++/// Trait for securely erasing values from memory.
++pub trait Zeroize {
++    /// Zero out this object from memory using Rust intrinsics which ensure the
++    /// zeroization operation is not "optimized away" by the compiler.
++    fn zeroize(&mut self);
++}
++
++/// Marker trait signifying that this type will [`Zeroize::zeroize`] itself on [`Drop`].
++pub trait ZeroizeOnDrop {}
++
++/// Marker trait for types whose [`Default`] is the desired zeroization result
++pub trait DefaultIsZeroes: Copy + Default + Sized {}
++
++/// Fallible trait for representing cases where zeroization may or may not be
++/// possible.
++///
++/// This is primarily useful for scenarios like reference counted data, where
++/// zeroization is only possible when the last reference is dropped.
++pub trait TryZeroize {
++    /// Try to zero out this object from memory using Rust intrinsics which
++    /// ensure the zeroization operation is not "optimized away" by the
++    /// compiler.
++    #[must_use]
++    fn try_zeroize(&mut self) -> bool;
++}
++
++impl<Z> Zeroize for Z
++where
++    Z: DefaultIsZeroes,
++{
++    fn zeroize(&mut self) {
++        volatile_write(self, Z::default());
++        atomic_fence();
++    }
++}
++
++macro_rules! impl_zeroize_with_default {
++    ($($type:ty),+) => {
++        $(impl DefaultIsZeroes for $type {})+
++    };
++}
++
++#[rustfmt::skip]
++impl_zeroize_with_default! {
++    PhantomPinned, (), bool, char,
++    f32, f64,
++    i8, i16, i32, i64, i128, isize,
++    u8, u16, u32, u64, u128, usize
++}
++
++/// `PhantomPinned` is zero sized so provide a ZeroizeOnDrop implementation.
++impl ZeroizeOnDrop for PhantomPinned {}
++
++/// `()` is zero sized so provide a ZeroizeOnDrop implementation.
++impl ZeroizeOnDrop for () {}
++
++macro_rules! impl_zeroize_for_non_zero {
++    ($($type:ty),+) => {
++        $(
++            impl Zeroize for $type {
++                fn zeroize(&mut self) {
++                    const ONE: $type = match <$type>::new(1) {
++                        Some(one) => one,
++                        None => unreachable!(),
++                    };
++                    volatile_write(self, ONE);
++                    atomic_fence();
++                }
++            }
++        )+
++    };
++}
++
++impl_zeroize_for_non_zero!(
++    NonZeroI8,
++    NonZeroI16,
++    NonZeroI32,
++    NonZeroI64,
++    NonZeroI128,
++    NonZeroIsize,
++    NonZeroU8,
++    NonZeroU16,
++    NonZeroU32,
++    NonZeroU64,
++    NonZeroU128,
++    NonZeroUsize
++);
++
++impl<Z> Zeroize for num::Wrapping<Z>
++where
++    Z: Zeroize,
++{
++    fn zeroize(&mut self) {
++        self.0.zeroize();
++    }
++}
++
++/// Impl [`Zeroize`] on arrays of types that impl [`Zeroize`].
++impl<Z, const N: usize> Zeroize for [Z; N]
++where
++    Z: Zeroize,
++{
++    fn zeroize(&mut self) {
++        self.iter_mut().zeroize();
++    }
++}
++
++/// Impl [`ZeroizeOnDrop`] on arrays of types that impl [`ZeroizeOnDrop`].
++impl<Z, const N: usize> ZeroizeOnDrop for [Z; N] where Z: ZeroizeOnDrop {}
++
++impl<Z> Zeroize for IterMut<'_, Z>
++where
++    Z: Zeroize,
++{
++    fn zeroize(&mut self) {
++        for elem in self {
++            elem.zeroize();
++        }
++    }
++}
++
++impl<Z> Zeroize for Option<Z>
++where
++    Z: Zeroize,
++{
++    fn zeroize(&mut self) {
++        if let Some(value) = self {
++            value.zeroize();
++
++            // Ensures self is None and that the value was dropped. Without the take, the drop
++            // of the (zeroized) value isn't called, which might lead to a leak or other
++            // unexpected behavior. For example, if this were Option<Vec<T>>, the above call to
++            // zeroize would not free the allocated memory, but the the `take` call will.
++            self.take();
++        }
++
++        // Ensure that if the `Option` were previously `Some` but a value was copied/moved out
++        // that the remaining space in the `Option` is zeroized.
++        //
++        // Safety:
++        //
++        // The memory pointed to by `self` is valid for `size_of::<Self>()` bytes.
++        // It is also properly aligned, because `u8` has an alignment of `1`.
++        unsafe {
++            volatile_set((self as *mut Self).cast::<u8>(), 0, size_of::<Self>());
++        }
++
++        // Ensures self is overwritten with the `None` bit pattern. volatile_write can't be
++        // used because Option<Z> is not copy.
++        //
++        // Safety:
++        //
++        // self is safe to replace with `None`, which the take() call above should have
++        // already done semantically. Any value which needed to be dropped will have been
++        // done so by take().
++        unsafe { ptr::write_volatile(self, None) }
++
++        atomic_fence();
++    }
++}
++
++impl<Z> ZeroizeOnDrop for Option<Z> where Z: ZeroizeOnDrop {}
++
++/// Impl [`Zeroize`] on [`MaybeUninit`] types.
++///
++/// This fills the memory with zeroes.
++/// Note that this ignore invariants that `Z` might have, because
++/// [`MaybeUninit`] removes all invariants.
++impl<Z> Zeroize for MaybeUninit<Z> {
++    fn zeroize(&mut self) {
++        // Safety:
++        // `MaybeUninit` is valid for any byte pattern, including zeros.
++        unsafe { ptr::write_volatile(self, MaybeUninit::zeroed()) }
++        atomic_fence();
++    }
++}
++
++/// Impl [`Zeroize`] on slices of [`MaybeUninit`] types.
++///
++/// This impl can eventually be optimized using an memset intrinsic,
++/// such as [`core::intrinsics::volatile_set_memory`].
++///
++/// This fills the slice with zeroes.
++///
++/// Note that this ignore invariants that `Z` might have, because
++/// [`MaybeUninit`] removes all invariants.
++impl<Z> Zeroize for [MaybeUninit<Z>] {
++    fn zeroize(&mut self) {
++        let ptr = self.as_mut_ptr().cast::<MaybeUninit<u8>>();
++        let size = self.len().checked_mul(size_of::<Z>()).unwrap();
++        assert!(size <= isize::MAX as usize);
++
++        // Safety:
++        //
++        // This is safe, because every valid pointer is well aligned for u8
++        // and it is backed by a single allocated object for at least `self.len() * size_pf::<Z>()` bytes.
++        // and 0 is a valid value for `MaybeUninit<Z>`
++        // The memory of the slice should not wrap around the address space.
++        unsafe { volatile_set(ptr, MaybeUninit::zeroed(), size) }
++        atomic_fence();
++    }
++}
++
++/// Impl [`Zeroize`] on slices of types that can be zeroized with [`Default`].
++///
++/// This impl can eventually be optimized using an memset intrinsic,
++/// such as [`core::intrinsics::volatile_set_memory`]. For that reason the
++/// blanket impl on slices is bounded by [`DefaultIsZeroes`].
++///
++/// To zeroize a mut slice of `Z: Zeroize` which does not impl
++/// [`DefaultIsZeroes`], call `iter_mut().zeroize()`.
++impl<Z> Zeroize for [Z]
++where
++    Z: DefaultIsZeroes,
++{
++    fn zeroize(&mut self) {
++        assert!(self.len() <= isize::MAX as usize);
++
++        // Safety:
++        //
++        // This is safe, because the slice is well aligned and is backed by a single allocated
++        // object for at least `self.len()` elements of type `Z`.
++        // `self.len()` is also not larger than an `isize`, because of the assertion above.
++        // The memory of the slice should not wrap around the address space.
++        unsafe { volatile_set(self.as_mut_ptr(), Z::default(), self.len()) };
++        atomic_fence();
++    }
++}
++
++impl Zeroize for str {
++    fn zeroize(&mut self) {
++        // Safety:
++        // A zeroized byte slice is a valid UTF-8 string.
++        unsafe { self.as_bytes_mut().zeroize() }
++    }
++}
++
++/// [`PhantomData`] is always zero sized so provide a [`Zeroize`] implementation.
++impl<Z> Zeroize for PhantomData<Z> {
++    fn zeroize(&mut self) {}
++}
++
++/// [`PhantomData` is always zero sized so provide a ZeroizeOnDrop implementation.
++impl<Z> ZeroizeOnDrop for PhantomData<Z> {}
++
++macro_rules! impl_zeroize_tuple {
++    ( $( $type_name:ident ),+ ) => {
++        impl<$($type_name: Zeroize),+> Zeroize for ($($type_name,)+) {
++            fn zeroize(&mut self) {
++                #[allow(non_snake_case)]
++                let ($($type_name,)+) = self;
++                $($type_name.zeroize());+
++            }
++        }
++
++        impl<$($type_name: ZeroizeOnDrop),+> ZeroizeOnDrop for ($($type_name,)+) { }
++    }
++}
++
++// Generic implementations for tuples up to 10 parameters.
++impl_zeroize_tuple!(A);
++impl_zeroize_tuple!(A, B);
++impl_zeroize_tuple!(A, B, C);
++impl_zeroize_tuple!(A, B, C, D);
++impl_zeroize_tuple!(A, B, C, D, E);
++impl_zeroize_tuple!(A, B, C, D, E, F);
++impl_zeroize_tuple!(A, B, C, D, E, F, G);
++impl_zeroize_tuple!(A, B, C, D, E, F, G, H);
++impl_zeroize_tuple!(A, B, C, D, E, F, G, H, I);
++impl_zeroize_tuple!(A, B, C, D, E, F, G, H, I, J);
++
++#[cfg(feature = "alloc")]
++impl<Z> Zeroize for Vec<Z>
++where
++    Z: Zeroize,
++{
++    /// "Best effort" zeroization for `Vec`.
++    ///
++    /// Ensures the entire capacity of the `Vec` is zeroed. Cannot ensure that
++    /// previous reallocations did not leave values on the heap.
++    fn zeroize(&mut self) {
++        // Zeroize all the initialized elements.
++        self.iter_mut().zeroize();
++
++        // Set the Vec's length to 0 and drop all the elements.
++        self.clear();
++
++        // Zero the full capacity of `Vec`.
++        self.spare_capacity_mut().zeroize();
++    }
++}
++
++#[cfg(feature = "alloc")]
++impl<Z> ZeroizeOnDrop for Vec<Z> where Z: ZeroizeOnDrop {}
++
++#[cfg(feature = "alloc")]
++impl<Z> Zeroize for Box<[Z]>
++where
++    Z: Zeroize,
++{
++    /// Unlike `Vec`, `Box<[Z]>` cannot reallocate, so we can be sure that we are not leaving
++    /// values on the heap.
++    fn zeroize(&mut self) {
++        self.iter_mut().zeroize();
++    }
++}
++
++#[cfg(feature = "alloc")]
++impl<Z> ZeroizeOnDrop for Box<[Z]> where Z: ZeroizeOnDrop {}
++
++#[cfg(feature = "alloc")]
++impl Zeroize for Box<str> {
++    fn zeroize(&mut self) {
++        self.as_mut().zeroize();
++    }
++}
++
++#[cfg(feature = "alloc")]
++impl Zeroize for String {
++    fn zeroize(&mut self) {
++        unsafe { self.as_mut_vec() }.zeroize();
++    }
++}
++
++#[cfg(feature = "std")]
++impl Zeroize for CString {
++    fn zeroize(&mut self) {
++        use core::mem;
++
++        // mem::take uses replace internally to swap the pointer
++        // Unfortunately this results in an allocation for a Box::new(&[0]) as CString must
++        // contain a trailing zero byte
++        let this = mem::take(self);
++
++        // - CString::into_bytes_with_nul calls ::into_vec which takes ownership of the heap pointer
++        // as a Vec<u8>
++        // - Calling .zeroize() on the resulting vector clears out the bytes
++        // From: https://github.com/RustCrypto/utils/pull/759#issuecomment-1087976570
++        let mut buf = this.into_bytes_with_nul();
++        buf.zeroize();
++
++        // expect() should never fail, because zeroize() truncates the Vec
++        let zeroed = CString::new(buf).expect("buf not truncated");
++
++        // Replace self by the zeroed CString to maintain the original ptr of the buffer
++        let _ = mem::replace(self, zeroed);
++    }
++}
++
++/// `Zeroizing` is a a wrapper for any `Z: Zeroize` type which implements a
++/// `Drop` handler which zeroizes dropped values.
++#[derive(Debug, Default, Eq, PartialEq)]
++pub struct Zeroizing<Z: Zeroize>(Z);
++
++impl<Z> Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    /// Move value inside a `Zeroizing` wrapper which ensures it will be
++    /// zeroized when it's dropped.
++    #[inline(always)]
++    pub fn new(value: Z) -> Self {
++        Self(value)
++    }
++}
++
++impl<Z: Zeroize + Clone> Clone for Zeroizing<Z> {
++    #[inline(always)]
++    fn clone(&self) -> Self {
++        Self(self.0.clone())
++    }
++
++    #[inline(always)]
++    fn clone_from(&mut self, source: &Self) {
++        self.0.zeroize();
++        self.0.clone_from(&source.0);
++    }
++}
++
++impl<Z> From<Z> for Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    #[inline(always)]
++    fn from(value: Z) -> Zeroizing<Z> {
++        Zeroizing(value)
++    }
++}
++
++impl<Z> ops::Deref for Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    type Target = Z;
++
++    #[inline(always)]
++    fn deref(&self) -> &Z {
++        &self.0
++    }
++}
++
++impl<Z> ops::DerefMut for Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    #[inline(always)]
++    fn deref_mut(&mut self) -> &mut Z {
++        &mut self.0
++    }
++}
++
++impl<T, Z> AsRef<T> for Zeroizing<Z>
++where
++    T: ?Sized,
++    Z: AsRef<T> + Zeroize,
++{
++    #[inline(always)]
++    fn as_ref(&self) -> &T {
++        self.0.as_ref()
++    }
++}
++
++impl<T, Z> AsMut<T> for Zeroizing<Z>
++where
++    T: ?Sized,
++    Z: AsMut<T> + Zeroize,
++{
++    #[inline(always)]
++    fn as_mut(&mut self) -> &mut T {
++        self.0.as_mut()
++    }
++}
++
++impl<Z> Zeroize for Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    fn zeroize(&mut self) {
++        self.0.zeroize();
++    }
++}
++
++impl<Z> ZeroizeOnDrop for Zeroizing<Z> where Z: Zeroize {}
++
++impl<Z> Drop for Zeroizing<Z>
++where
++    Z: Zeroize,
++{
++    fn drop(&mut self) {
++        self.0.zeroize()
++    }
++}
++
++#[cfg(feature = "serde")]
++impl<Z> serde::Serialize for Zeroizing<Z>
++where
++    Z: Zeroize + serde::Serialize,
++{
++    #[inline(always)]
++    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
++    where
++        S: serde::Serializer,
++    {
++        self.0.serialize(serializer)
++    }
++}
++
++#[cfg(feature = "serde")]
++impl<'de, Z> serde::Deserialize<'de> for Zeroizing<Z>
++where
++    Z: Zeroize + serde::Deserialize<'de>,
++{
++    #[inline(always)]
++    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
++    where
++        D: serde::Deserializer<'de>,
++    {
++        Ok(Self(Z::deserialize(deserializer)?))
++    }
++}
++
++/// Use fences to prevent accesses from being reordered before this
++/// point, which should hopefully help ensure that all accessors
++/// see zeroes after this point.
++#[inline(always)]
++fn atomic_fence() {
++    atomic::compiler_fence(atomic::Ordering::SeqCst);
++}
++
++/// Perform a volatile write to the destination
++#[inline(always)]
++fn volatile_write<T: Copy + Sized>(dst: &mut T, src: T) {
++    unsafe { ptr::write_volatile(dst, src) }
++}
++
++/// Perform a volatile `memset` operation which fills a slice with a value
++///
++/// Safety:
++/// The memory pointed to by `dst` must be a single allocated object that is valid for `count`
++/// contiguous elements of `T`.
++/// `count` must not be larger than an `isize`.
++/// `dst` being offset by `size_of::<T> * count` bytes must not wrap around the address space.
++/// Also `dst` must be properly aligned.
++#[inline(always)]
++unsafe fn volatile_set<T: Copy + Sized>(dst: *mut T, src: T, count: usize) {
++    // TODO(tarcieri): use `volatile_set_memory` when stabilized
++    for i in 0..count {
++        // Safety:
++        //
++        // This is safe because there is room for at least `count` objects of type `T` in the
++        // allocation pointed to by `dst`, because `count <= isize::MAX` and because
++        // `dst.add(count)` must not wrap around the address space.
++        let ptr = dst.add(i);
++
++        // Safety:
++        //
++        // This is safe, because the pointer is valid and because `dst` is well aligned for `T` and
++        // `ptr` is an offset of `dst` by a multiple of `size_of::<T>()` bytes.
++        ptr::write_volatile(ptr, src);
++    }
++}
++
++/// Zeroizes a flat type/struct. Only zeroizes the values that it owns, and it does not work on
++/// dynamically sized values or trait objects. It would be inefficient to use this function on a
++/// type that already implements `ZeroizeOnDrop`.
++///
++/// # Safety
++/// - The type must not contain references to outside data or dynamically sized data, such as
++///   `Vec<T>` or `String`.
++/// - Values stored in the type must not have `Drop` impls.
++/// - This function can invalidate the type if it is used after this function is called on it.
++///   It is advisable to call this function only in `impl Drop`.
++/// - The bit pattern of all zeroes must be valid for the data being zeroized. This may not be
++///   true for enums and pointers.
++///
++/// # Incompatible data types
++/// Some data types that cannot be safely zeroized using `zeroize_flat_type` include,
++/// but are not limited to:
++/// - References: `&T` and `&mut T`
++/// - Non-nullable types: `NonNull<T>`, `NonZeroU32`, etc.
++/// - Enums with explicit non-zero tags.
++/// - Smart pointers and collections: `Arc<T>`, `Box<T>`, `Vec<T>`, `HashMap<K, V>`, `String`, etc.
++///
++/// # Examples
++/// Safe usage for a struct containing strictly flat data:
++/// ```
++/// use zeroize::{ZeroizeOnDrop, zeroize_flat_type};
++///
++/// struct DataToZeroize {
++///     flat_data_1: [u8; 32],
++///     flat_data_2: SomeMoreFlatData,
++/// }
++///
++/// struct SomeMoreFlatData(u64);
++///
++/// impl Drop for DataToZeroize {
++///     fn drop(&mut self) {
++///         unsafe { zeroize_flat_type(self as *mut Self) }
++///     }
++/// }
++/// impl ZeroizeOnDrop for DataToZeroize {}
++///
++/// let mut data = DataToZeroize {
++///     flat_data_1: [3u8; 32],
++///     flat_data_2: SomeMoreFlatData(123u64)
++/// };
++///
++/// // data gets zeroized when dropped
++/// ```
++#[inline(always)]
++pub unsafe fn zeroize_flat_type<F: Sized>(data: *mut F) {
++    let size = size_of::<F>();
++    // Safety:
++    //
++    // This is safe because `size_of<T>()` returns the exact size of the object in memory, and
++    // `data_ptr` points directly to the first byte of the data.
++    volatile_set(data as *mut u8, 0, size);
++    atomic_fence()
++}
++
++/// Internal module used as support for `AssertZeroizeOnDrop`.
++#[doc(hidden)]
++pub mod __internal {
++    use super::*;
++
++    /// Auto-deref workaround for deriving `ZeroizeOnDrop`.
++    pub trait AssertZeroizeOnDrop {
++        fn zeroize_or_on_drop(self);
++    }
++
++    impl<T: ZeroizeOnDrop + ?Sized> AssertZeroizeOnDrop for &&mut T {
++        fn zeroize_or_on_drop(self) {}
++    }
++
++    /// Auto-deref workaround for deriving `ZeroizeOnDrop`.
++    pub trait AssertZeroize {
++        fn zeroize_or_on_drop(&mut self);
++    }
++
++    impl<T: Zeroize + ?Sized> AssertZeroize for T {
++        fn zeroize_or_on_drop(&mut self) {
++            self.zeroize()
++        }
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/x86.rs /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/x86.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/src/x86.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/src/x86.rs	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,29 @@
++//! [`Zeroize`] impls for x86 SIMD registers
++
++use crate::{atomic_fence, volatile_write, Zeroize};
++
++#[cfg(target_arch = "x86")]
++use core::arch::x86::*;
++
++#[cfg(target_arch = "x86_64")]
++use core::arch::x86_64::*;
++
++macro_rules! impl_zeroize_for_simd_register {
++    ($($type:ty),* $(,)?) => {
++        $(
++            impl Zeroize for $type {
++                #[inline]
++                fn zeroize(&mut self) {
++                    volatile_write(self, unsafe { core::mem::zeroed() });
++                    atomic_fence();
++                }
++            }
++        )*
++    };
++}
++
++impl_zeroize_for_simd_register!(__m128, __m128d, __m128i, __m256, __m256d, __m256i);
++
++// NOTE: MSRV 1.72
++#[cfg(feature = "simd")]
++impl_zeroize_for_simd_register!(__m512, __m512d, __m512i);
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/tests/zeroize_derive.rs /tmp/zeroize-maturin-zos/zeroize-1.8.2/tests/zeroize_derive.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/tests/zeroize_derive.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/tests/zeroize_derive.rs	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,368 @@
++//! Integration tests for `zeroize_derive` proc macros
++
++#![cfg(feature = "zeroize_derive")]
++
++use zeroize::{Zeroize, ZeroizeOnDrop};
++
++#[test]
++fn derive_tuple_struct_test() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z([u8; 3]);
++
++    let mut value = Z([1, 2, 3]);
++    value.zeroize();
++    assert_eq!(&value.0, &[0, 0, 0])
++}
++
++#[test]
++#[cfg(feature = "alloc")]
++fn derive_struct_test() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z {
++        string: String,
++        vec: Vec<u8>,
++        bytearray: [u8; 3],
++        number: usize,
++        boolean: bool,
++    }
++
++    let mut value = Z {
++        string: String::from("Hello, world!"),
++        vec: vec![1, 2, 3],
++        bytearray: [4, 5, 6],
++        number: 42,
++        boolean: true,
++    };
++
++    value.zeroize();
++
++    assert!(value.string.is_empty());
++    assert!(value.vec.is_empty());
++    assert_eq!(&value.bytearray, &[0, 0, 0]);
++    assert_eq!(value.number, 0);
++    assert!(!value.boolean);
++}
++
++#[test]
++fn derive_enum_test() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    enum Z {
++        #[allow(dead_code)]
++        Variant1,
++        Variant2(usize),
++    }
++
++    let mut value = Z::Variant2(26);
++
++    value.zeroize();
++
++    assert!(matches!(value, Z::Variant2(0)));
++}
++
++/// Test that the custom macro actually derived `Drop` for `Z`
++#[test]
++fn derive_struct_drop() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z([u8; 3]);
++
++    assert!(std::mem::needs_drop::<Z>());
++}
++
++/// Test that the custom macro actually derived `Drop` for `Z`
++#[test]
++fn derive_enum_drop() {
++    #[allow(dead_code)]
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    enum Z {
++        Variant1,
++        Variant2(usize),
++    }
++
++    assert!(std::mem::needs_drop::<Z>());
++}
++
++/// Test that the custom macro actually derived `Drop` for `Z`
++#[test]
++fn derive_struct_only_drop() {
++    #[derive(ZeroizeOnDrop)]
++    struct Z([u8; 3]);
++
++    assert!(std::mem::needs_drop::<Z>());
++}
++
++/// Test that the custom macro actually derived `Drop` for `Z`
++#[test]
++fn derive_enum_only_drop() {
++    #[allow(dead_code)]
++    #[derive(ZeroizeOnDrop)]
++    enum Z {
++        Variant1,
++        Variant2(usize),
++    }
++
++    assert!(std::mem::needs_drop::<Z>());
++}
++
++/// Test that `Drop` is not derived in the following case by defining a
++/// `Drop` impl which should conflict if the custom derive defined one too
++#[allow(dead_code)]
++#[derive(Zeroize)]
++struct ZeroizeNoDropStruct([u8; 3]);
++
++impl Drop for ZeroizeNoDropStruct {
++    fn drop(&mut self) {}
++}
++
++#[allow(dead_code)]
++#[derive(Zeroize)]
++enum ZeroizeNoDropEnum {
++    Variant([u8; 3]),
++}
++
++impl Drop for ZeroizeNoDropEnum {
++    fn drop(&mut self) {}
++}
++
++#[test]
++#[cfg(feature = "alloc")]
++fn derive_struct_skip() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z {
++        string: String,
++        vec: Vec<u8>,
++        #[zeroize(skip)]
++        bytearray: [u8; 3],
++        number: usize,
++        boolean: bool,
++    }
++
++    let mut value = Z {
++        string: String::from("Hello, world!"),
++        vec: vec![1, 2, 3],
++        bytearray: [4, 5, 6],
++        number: 42,
++        boolean: true,
++    };
++
++    value.zeroize();
++
++    assert!(value.string.is_empty());
++    assert!(value.vec.is_empty());
++    assert_eq!(&value.bytearray, &[4, 5, 6]);
++    assert_eq!(value.number, 0);
++    assert!(!value.boolean);
++}
++
++#[test]
++#[cfg(feature = "alloc")]
++fn derive_enum_skip() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    enum Z {
++        #[allow(dead_code)]
++        Variant1,
++        #[zeroize(skip)]
++        Variant2([u8; 3]),
++        #[zeroize(skip)]
++        Variant3 {
++            string: String,
++            vec: Vec<u8>,
++            bytearray: [u8; 3],
++            number: usize,
++            boolean: bool,
++        },
++        Variant4 {
++            string: String,
++            vec: Vec<u8>,
++            #[zeroize(skip)]
++            bytearray: [u8; 3],
++            number: usize,
++            boolean: bool,
++        },
++    }
++
++    let mut value = Z::Variant2([4, 5, 6]);
++
++    value.zeroize();
++
++    assert!(matches!(&value, Z::Variant2([4, 5, 6])));
++
++    let mut value = Z::Variant3 {
++        string: String::from("Hello, world!"),
++        vec: vec![1, 2, 3],
++        bytearray: [4, 5, 6],
++        number: 42,
++        boolean: true,
++    };
++
++    value.zeroize();
++
++    assert!(matches!(
++        &value,
++        Z::Variant3 { string, vec, bytearray, number, boolean }
++        if string == "Hello, world!" &&
++            vec == &[1, 2, 3] &&
++            bytearray == &[4, 5, 6] &&
++            *number == 42 &&
++            *boolean
++    ));
++
++    let mut value = Z::Variant4 {
++        string: String::from("Hello, world!"),
++        vec: vec![1, 2, 3],
++        bytearray: [4, 5, 6],
++        number: 42,
++        boolean: true,
++    };
++
++    value.zeroize();
++
++    assert!(matches!(
++        &value,
++        Z::Variant4 { string, vec, bytearray, number, boolean }
++        if string.is_empty() &&
++            vec.is_empty() &&
++            bytearray == &[4, 5, 6] &&
++            *number == 0 &&
++            !boolean
++    ));
++}
++
++#[test]
++fn derive_bound() {
++    trait T: Zeroize {}
++
++    impl T for u8 {}
++
++    #[derive(Zeroize)]
++    #[zeroize(bound = "X: T")]
++    struct Z<X>(X);
++
++    let mut value = Z(5_u8);
++
++    value.zeroize();
++
++    assert_eq!(value.0, 0);
++}
++
++#[test]
++fn derive_inherit_zeroize_on_drop() {
++    #[derive(ZeroizeOnDrop)]
++    struct X([u8; 3]);
++
++    #[derive(ZeroizeOnDrop)]
++    struct Z(X);
++
++    let mut value = Z(X([1, 2, 3]));
++    unsafe {
++        std::ptr::drop_in_place(&mut value);
++    }
++    assert_eq!(&value.0 .0, &[0, 0, 0])
++}
++
++#[test]
++fn derive_inherit_from_both() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct X([u8; 3]);
++
++    #[derive(ZeroizeOnDrop)]
++    struct Z(X);
++
++    let mut value = Z(X([1, 2, 3]));
++    unsafe {
++        std::ptr::drop_in_place(&mut value);
++    }
++    assert_eq!(&value.0 .0, &[0, 0, 0])
++}
++
++#[test]
++fn derive_inherit_both() {
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct X([u8; 3]);
++
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z(X);
++
++    let mut value = Z(X([1, 2, 3]));
++    unsafe {
++        std::ptr::drop_in_place(&mut value);
++    }
++    assert_eq!(&value.0 .0, &[0, 0, 0])
++}
++
++#[test]
++fn derive_deref() {
++    struct X([u8; 3]);
++
++    impl std::ops::Deref for X {
++        type Target = [u8];
++
++        fn deref(&self) -> &Self::Target {
++            &self.0
++        }
++    }
++
++    impl std::ops::DerefMut for X {
++        fn deref_mut(&mut self) -> &mut Self::Target {
++            &mut self.0
++        }
++    }
++
++    #[derive(Zeroize, ZeroizeOnDrop)]
++    struct Z(X);
++
++    let mut value = Z(X([1, 2, 3]));
++    unsafe {
++        std::ptr::drop_in_place(&mut value);
++    }
++    assert_eq!(&value.0 .0, &[0, 0, 0])
++}
++
++#[test]
++#[cfg(feature = "alloc")]
++#[allow(dead_code)]
++fn derive_zeroize_on_drop_generic() {
++    #[derive(ZeroizeOnDrop)]
++    struct Y<T: Zeroize>(Box<T>);
++
++    #[derive(ZeroizeOnDrop)]
++    struct Z<T: Zeroize>(Vec<T>);
++}
++
++#[test]
++#[allow(dead_code)]
++fn derive_zeroize_unused_param() {
++    #[derive(Zeroize)]
++    struct Z<T> {
++        arr: [u32; 5],
++        #[zeroize(skip)]
++        skipped: T,
++    }
++}
++
++#[test]
++#[allow(dead_code)]
++// Issue #878
++fn derive_zeroize_with_marker() {
++    #[derive(ZeroizeOnDrop, Zeroize)]
++    struct Test<A: Marker> {
++        #[zeroize(skip)]
++        field: Option<A>,
++    }
++
++    #[allow(dead_code)]
++    trait Secret: ZeroizeOnDrop + Zeroize {}
++
++    impl<A: Marker> Secret for Test<A> {}
++
++    trait Marker {}
++}
++
++#[test]
++#[allow(dead_code)]
++// Issue #878
++fn derive_zeroize_used_param() {
++    #[derive(Zeroize)]
++    struct Z<T> {
++        used: T,
++    }
++}
+diff -ruN '--exclude=.cargo-checksum.json' '--exclude=*.cargo-ok' /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/tests/zeroize.rs /tmp/zeroize-maturin-zos/zeroize-1.8.2/tests/zeroize.rs
+--- /home/itodorov/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/zeroize-1.8.2/zeroize-1.8.2/tests/zeroize.rs	1969-12-31 19:00:00.000000000 -0500
++++ /tmp/zeroize-maturin-zos/zeroize-1.8.2/tests/zeroize.rs	2006-07-23 21:21:28.000000000 -0400
+@@ -0,0 +1,210 @@
++//! zeroize integration tests.
++
++use std::{
++    marker::{PhantomData, PhantomPinned},
++    mem::{size_of, MaybeUninit},
++    num::*,
++};
++use zeroize::*;
++
++#[cfg(feature = "std")]
++use std::ffi::CString;
++
++#[derive(Clone, Debug, PartialEq)]
++struct ZeroizedOnDrop(u64);
++
++impl Drop for ZeroizedOnDrop {
++    fn drop(&mut self) {
++        self.0.zeroize();
++    }
++}
++
++#[test]
++fn non_zero() {
++    macro_rules! non_zero_test {
++        ($($type:ty),+) => {
++            $(let mut value = <$type>::new(42).unwrap();
++            value.zeroize();
++            assert_eq!(value.get(), 1);)+
++        };
++    }
++
++    non_zero_test!(
++        NonZeroI8,
++        NonZeroI16,
++        NonZeroI32,
++        NonZeroI64,
++        NonZeroI128,
++        NonZeroIsize,
++        NonZeroU8,
++        NonZeroU16,
++        NonZeroU32,
++        NonZeroU64,
++        NonZeroU128,
++        NonZeroUsize
++    );
++}
++
++#[test]
++fn zeroize_byte_arrays() {
++    let mut arr = [42u8; 137];
++    arr.zeroize();
++    assert_eq!(arr.as_ref(), [0u8; 137].as_ref());
++}
++
++#[test]
++fn zeroize_on_drop_byte_arrays() {
++    let mut arr = [ZeroizedOnDrop(42); 1];
++    unsafe { core::ptr::drop_in_place(&mut arr) };
++    assert_eq!(arr.as_ref(), [ZeroizedOnDrop(0); 1].as_ref());
++}
++
++#[test]
++fn zeroize_maybeuninit_byte_arrays() {
++    let mut arr = [MaybeUninit::new(42u64); 64];
++    arr.zeroize();
++    let arr_init: [u64; 64] = unsafe { core::mem::transmute(arr) };
++    assert_eq!(arr_init, [0u64; 64]);
++}
++
++#[test]
++fn zeroize_check_zerosize_types() {
++    // Since we assume these types have zero size, we test this holds for
++    // the current version of Rust.
++    assert_eq!(size_of::<()>(), 0);
++    assert_eq!(size_of::<PhantomPinned>(), 0);
++    assert_eq!(size_of::<PhantomData<usize>>(), 0);
++}
++
++#[test]
++fn zeroize_check_tuple() {
++    let mut tup1 = (42u8,);
++    tup1.zeroize();
++    assert_eq!(tup1, (0u8,));
++
++    let mut tup2 = (42u8, 42u8);
++    tup2.zeroize();
++    assert_eq!(tup2, (0u8, 0u8));
++}
++
++#[test]
++fn zeroize_on_drop_check_tuple() {
++    let mut tup1 = (ZeroizedOnDrop(42),);
++    unsafe { core::ptr::drop_in_place(&mut tup1) };
++    assert_eq!(tup1, (ZeroizedOnDrop(0),));
++
++    let mut tup2 = (ZeroizedOnDrop(42), ZeroizedOnDrop(42));
++    unsafe { core::ptr::drop_in_place(&mut tup2) };
++    assert_eq!(tup2, (ZeroizedOnDrop(0), ZeroizedOnDrop(0)));
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn zeroize_vec() {
++    let mut vec = vec![42; 3];
++    vec.zeroize();
++    assert!(vec.is_empty());
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn zeroize_vec_entire_capacity() {
++    #[derive(Clone)]
++    struct PanicOnNonZeroDrop(u64);
++
++    impl Zeroize for PanicOnNonZeroDrop {
++        fn zeroize(&mut self) {
++            self.0 = 0;
++        }
++    }
++
++    impl Drop for PanicOnNonZeroDrop {
++        fn drop(&mut self) {
++            if self.0 != 0 {
++                panic!("dropped non-zeroized data");
++            }
++        }
++    }
++
++    // Ensure that the entire capacity of the vec is zeroized and that no unitinialized data
++    // is ever interpreted as initialized
++    let mut vec = vec![PanicOnNonZeroDrop(42); 2];
++
++    unsafe {
++        vec.set_len(1);
++    }
++
++    vec.zeroize();
++
++    unsafe {
++        vec.set_len(2);
++    }
++
++    drop(vec);
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn zeroize_string() {
++    let mut string = String::from("Hello, world!");
++    string.zeroize();
++    assert!(string.is_empty());
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn zeroize_string_entire_capacity() {
++    let mut string = String::from("Hello, world!");
++    string.truncate(5);
++
++    string.zeroize();
++
++    // convert the string to a vec to easily access the unused capacity
++    let mut as_vec = string.into_bytes();
++    unsafe { as_vec.set_len(as_vec.capacity()) };
++
++    assert!(as_vec.iter().all(|byte| *byte == 0));
++}
++
++// TODO(tarcieri): debug flaky test (with potential UB?) See: RustCrypto/utils#774
++#[cfg(feature = "std")]
++#[ignore]
++#[test]
++fn zeroize_c_string() {
++    let mut cstring = CString::new("Hello, world!").expect("CString::new failed");
++    let orig_len = cstring.as_bytes().len();
++    let orig_ptr = cstring.as_bytes().as_ptr();
++    cstring.zeroize();
++    // This doesn't quite test that the original memory has been cleared, but only that
++    // cstring now owns an empty buffer
++    assert!(cstring.as_bytes().is_empty());
++    for i in 0..orig_len {
++        unsafe {
++            // Using a simple deref, only one iteration of the loop is performed
++            // presumably because after zeroize, the internal buffer has a length of one/
++            // `read_volatile` seems to "fix" this
++            // Note that this is very likely UB
++            assert_eq!(orig_ptr.add(i).read_volatile(), 0);
++        }
++    }
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn zeroize_box() {
++    let mut boxed_arr = Box::new([42u8; 3]);
++    boxed_arr.zeroize();
++    assert_eq!(boxed_arr.as_ref(), &[0u8; 3]);
++}
++
++#[cfg(feature = "alloc")]
++#[test]
++fn asref() {
++    let mut buffer: Zeroizing<Vec<u8>> = Default::default();
++    let _asmut: &mut [u8] = buffer.as_mut();
++    let _asref: &[u8] = buffer.as_ref();
++
++    let mut buffer: Zeroizing<Box<[u8]>> = Default::default();
++    let _asmut: &mut [u8] = buffer.as_mut();
++    let _asref: &[u8] = buffer.as_ref();
++}
