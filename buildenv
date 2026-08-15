@@ -230,6 +230,24 @@ zopen_custom_install() {
   cp ./maturin "${ZOPEN_INSTALL_DIR}/bin/maturin"
   chtag -b "${ZOPEN_INSTALL_DIR}/bin/maturin"
   chmod +x "${ZOPEN_INSTALL_DIR}/bin/maturin"
+
+  # Put the wheel where CI collects it: ${ZOPEN_ROOT}/install/dist, alongside
+  # the pax and metadata.json. Building it into dist/ is not enough -- the
+  # publish step looks only under install/dist and otherwise stops with
+  #
+  #   ERROR: PUBLISH_PYTHON_WHEEL is enabled, but zopen-build produced no wheel
+  #   under install/dist/.
+  #
+  # after the pax has already been built and signed, so the failure arrives at
+  # the very end of an otherwise successful run.
+  #
+  # Deliberately not under ZOPEN_INSTALL_DIR: that tree is what gets packaged,
+  # so a wheel there would ship a 21 MB second copy of the binary inside the pax
+  # that already contains it. This mirrors what the Python build system does for
+  # the ordinary ports.
+  mkdir -p "${ZOPEN_ROOT}/install/dist"
+  cp dist/*.whl "${ZOPEN_ROOT}/install/dist/"
+  printInfo "Staged $(ls dist/*.whl | wc -l | tr -d ' ') wheel(s) for publishing"
 }
 
 zopen_check_results() {
