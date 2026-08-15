@@ -44,11 +44,17 @@ export ZOPEN_RUNTIME_DEPS="check_python"
 # There is nothing to bootstrap, configure or make -- the binary arrives ready.
 export ZOPEN_BOOTSTRAP="skip"
 export ZOPEN_CONFIGURE="skip"
-export ZOPEN_MAKE="skip"
+export ZOPEN_MAKE="zopen_custom_build"
 export ZOPEN_CHECK="zopen_custom_check"
 export ZOPEN_INSTALL="zopen_custom_install"
 
 MATURIN_BINARY_URL="https://github.com/zopencommunity/maturinport/releases/download/STABLE_maturinport_1/maturin-${MATURIN_VERSION}-zos"
+
+# The Python half of the wheel -- the PEP 517 backend, __main__, bootstrap and
+# the dist-info -- is identical on every platform, so it is taken from an
+# official wheel rather than reimplemented. Only the bundled binary differs.
+MATURIN_UPSTREAM_WHEEL="maturin-${MATURIN_VERSION}-py3-none-manylinux_2_12_x86_64.manylinux2010_x86_64.musllinux_1_1_x86_64.whl"
+MATURIN_UPSTREAM_WHEEL_URL="https://files.pythonhosted.org/packages/py3/m/maturin/${MATURIN_UPSTREAM_WHEEL}"
 
 zopen_get_version() {
   echo "${MATURIN_VERSION}"
@@ -73,6 +79,91 @@ zopen_init() {
   chtag -b ./maturin
   chmod +x ./maturin
   printInfo "Downloaded maturin binary: ${_mat_bytes} bytes"
+
+  if ! curl -fL --retry 3 -o upstream.whl "${MATURIN_UPSTREAM_WHEEL_URL}"; then
+    printError "Could not download the upstream maturin wheel from ${MATURIN_UPSTREAM_WHEEL_URL}"
+  fi
+  printInfo "Downloaded upstream wheel for its Python side"
+}
+
+# Build an installable wheel, not just a binary on PATH.
+#
+# A binary alone does not unblock anything. Packages that use maturin declare
+#
+#   [build-system]
+#   requires = ["maturin>=1.9,<2"]
+#   build-backend = "maturin"
+#
+# so pip has to install a Python package named maturin into its build
+# environment and import it as a PEP 517 backend. It never consults PATH. With
+# only the binary installed, pip goes to PyPI, finds no wheel for this platform,
+# tries to build maturin's sdist, and that needs Rust -- so the build fails
+# before the package's own code is reached.
+#
+# With this wheel in the index, "Installing build dependencies" succeeds and the
+# build proceeds to the point where cargo is genuinely required. That does not
+# make Rust packages buildable here -- nothing can, without a native cargo --
+# but it turns an unresolvable dependency into a clear message about the
+# toolchain, and it is the piece that has to exist before a native cargo would
+# be enough on its own.
+zopen_custom_build() {
+  mkdir -p dist
+  MATURIN_VERSION="${MATURIN_VERSION}" python3 - <<'WHEELEOF'
+import base64
+import csv
+import hashlib
+import io
+import os
+import zipfile
+
+version = os.environ["MATURIN_VERSION"]
+script = "maturin-%s.data/scripts/maturin" % version
+wheelmeta = "maturin-%s.dist-info/WHEEL" % version
+record = "maturin-%s.dist-info/RECORD" % version
+out_name = "dist/maturin-%s-py3-none-any.whl" % version
+
+binary = open("maturin", "rb").read()
+
+with zipfile.ZipFile("upstream.whl") as z:
+    blobs = {n: z.read(n) for n in z.namelist() if not n.endswith("/")}
+
+if script not in blobs:
+    raise SystemExit("upstream wheel has no %s; its layout changed" % script)
+blobs[script] = binary
+
+# Retag. The upstream wheel says manylinux, which pip on z/OS would reject
+# outright -- the wheel would sit in the index and never be selected.
+lines = [l for l in blobs[wheelmeta].decode().splitlines()
+         if not l.startswith("Tag:")]
+lines.append("Tag: py3-none-any")
+blobs[wheelmeta] = ("\n".join(lines) + "\n").encode()
+
+# RECORD carries a hash and size per file. A stale entry makes the wheel fail
+# installer verification, reported as a corrupt wheel rather than bad metadata.
+rows = []
+for n in sorted(blobs):
+    if n == record:
+        continue
+    digest = base64.urlsafe_b64encode(
+        hashlib.sha256(blobs[n]).digest()).rstrip(b"=").decode()
+    rows.append([n, "sha256=" + digest, str(len(blobs[n]))])
+rows.append([record, "", ""])
+buf = io.StringIO()
+csv.writer(buf, lineterminator="\n").writerows(rows)
+blobs[record] = buf.getvalue().encode()
+
+with zipfile.ZipFile(out_name, "w", zipfile.ZIP_DEFLATED) as out:
+    for n in sorted(blobs):
+        zi = zipfile.ZipInfo(n, date_time=(1980, 1, 1, 0, 0, 0))
+        # The script has to stay executable; pip copies the mode across.
+        zi.external_attr = (0o755 << 16) if n == script else (0o644 << 16)
+        zi.compress_type = zipfile.ZIP_DEFLATED
+        out.writestr(zi, blobs[n])
+
+print("Built %s (%d bytes)" % (out_name, os.path.getsize(out_name)))
+WHEELEOF
+  [ -f "dist/maturin-${MATURIN_VERSION}-py3-none-any.whl" ] || return 1
+  return 0
 }
 
 zopen_custom_check() {

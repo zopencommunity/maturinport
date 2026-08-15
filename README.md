@@ -31,12 +31,45 @@ $ maturin list-python
 `sdist` is not an exception despite "without compiling" in its description; it
 still reads cargo metadata to decide what to package.
 
-So what works today is `--version` and `--help` for each subcommand. The port is
-worth having as the place this lands once a native cargo exists, and so the
-binary is already packaged and tested — but installing it does not yet let you
-build a Rust-backed wheel on z/OS. Until then, wheels for this platform are
-cross-compiled on Linux, which is how pydantic-core, rpds-py and uv itself are
-produced.
+So what works today is `--version` and `--help` for each subcommand. Installing
+maturin does not let you build a Rust-backed wheel on z/OS, and nothing can
+until a native cargo exists. Wheels for this platform are cross-compiled on
+Linux, which is how pydantic-core, rpds-py and uv itself are produced.
+
+## Why the wheel still matters
+
+The port publishes an installable wheel as well as the binary, because a binary
+on PATH unblocks nothing. Packages built with maturin declare
+
+```toml
+[build-system]
+requires = ["maturin>=1.9,<2"]
+build-backend = "maturin"
+```
+
+so pip must install a Python package named `maturin` into its build environment
+and import it as a PEP 517 backend. It never consults PATH. Without the wheel,
+pip goes to PyPI, finds nothing for this platform, tries to build maturin's
+sdist, and that needs Rust — so the build dies before the package's own code is
+reached:
+
+```
+Collecting maturin<2,>=1.13.3
+  Downloading maturin-1.14.1.tar.gz
+  Preparing metadata (pyproject.toml): error
+```
+
+With the wheel in the index, that step succeeds and the build proceeds to the
+point where cargo is genuinely needed:
+
+```
+Installing build dependencies: finished with status 'done'
+Preparing metadata (pyproject.toml): error
+  Checking for Rust toolchain.... Rust not found
+```
+
+Still a failure, but an honest one that names the real obstacle — and it is the
+piece that has to exist before a native cargo would be sufficient on its own.
 
 ## Installation
 
