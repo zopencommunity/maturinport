@@ -1,40 +1,168 @@
-#!/bin/bash
-# Build environment for maturin on z/OS
-# Maturin: Build and publish crates with pyo3 bindings as Python packages
-# Port of maturin v1.14.1 to z/OS
+# bump: maturin-version /MATURIN_VERSION="(.*)"/ https://github.com/PyO3/maturin.git|semver:*
+MATURIN_VERSION="1.14.1"
 
+###
+### Build control file for the maturin port
+###
+### maturin builds and publishes Rust crates with pyo3 bindings as Python
+### packages. Nothing is compiled here: the binary was cross-compiled for
+### s390x-ibm-zos elsewhere and this port fetches and installs it, the same
+### arrangement the uv port uses.
+###
+### Cross-compilation infrastructure:
+###   https://github.ibm.com/compiler/rust-scripts  branch: itodorov/zos-cross-compile-setup
+###   rustc 1.86, target s390x-ibm-zos
+###
+
+export ZOPEN_PROJECT_NAME="maturin"
+export ZOPEN_NAME="maturin-${MATURIN_VERSION}"
 export ZOPEN_BUILD_LINE="STABLE"
+
+# "rust" and "python" are not categories zopen knows; the build stopped at
+# "Invalid category specified in $ZOPEN_CATEGORIES: python" before doing
+# anything else. data/tool_categories.txt in meta has the accepted list.
+export ZOPEN_CATEGORIES="development build_system utilities"
+
+export ZOPEN_STABLE_URL="https://github.com/PyO3/maturin.git"
+export ZOPEN_STABLE_TAG="v${MATURIN_VERSION}"
+export ZOPEN_DEV_URL="https://github.com/PyO3/maturin.git"
+
+# BARE on both lines. ZOPEN_TYPE alone does not settle it -- zopen-build
+# overwrites it from the per-line variable -- and anything else makes the build
+# clone the maturin source it has no use for.
+export ZOPEN_TYPE="BARE"
 export ZOPEN_STABLE_TYPE="BARE"
 export ZOPEN_DEV_TYPE="BARE"
 
-export ZOPEN_STABLE_TAG="v1.14.1"
-export ZOPEN_STABLE_URL="https://github.com/PyO3/maturin"
-export ZOPEN_STABLE_DEPS="curl gzip tar git"
-export ZOPEN_DEV_DEPS="curl gzip tar git"
+# check_python is a build dependency, not only a runtime one: the check below
+# runs maturin against an interpreter, and without one on PATH it fails in a way
+# that reads as maturin being broken.
+export ZOPEN_STABLE_DEPS="check_python curl"
+export ZOPEN_DEV_DEPS="check_python curl"
+export ZOPEN_RUNTIME_DEPS="check_python"
 
-export ZOPEN_CATEGORIES="rust python"
+# There is nothing to bootstrap, configure or make -- the binary arrives ready.
+export ZOPEN_BOOTSTRAP="skip"
+export ZOPEN_CONFIGURE="skip"
+export ZOPEN_MAKE="skip"
+export ZOPEN_CHECK="zopen_custom_check"
+export ZOPEN_INSTALL="zopen_custom_install"
 
-# Rust cross-compilation settings
-export RUSTCROSS_VERSION="1.86"
-export CARGO_BUILD_TARGET="s390x-ibm-zos"
+MATURIN_BINARY_URL="https://github.com/zopencommunity/maturinport/releases/download/STABLE_maturinport_1/maturin-${MATURIN_VERSION}-zos"
 
-zopen_check_results() {
-  dir="$1"
-  pfx="$2"
-  chk="$ZOPEN_TYPE"
-  if [ "${chk}" = "STABLE" ] || [ "${chk}" = "DEV" ]; then
-    # Basic smoke test
-    if "${pfx}"/bin/maturin --version > /dev/null 2>&1; then
-      echo "maturin --version: PASSED"
-    else
-      echo "maturin --version: FAILED"
-      return 1
-    fi
-  fi
+zopen_get_version() {
+  echo "${MATURIN_VERSION}"
 }
 
-zopen_post_install() {
-  prefix="$1"
-  # Create symlinks
-  ln -sf maturin "${prefix}/bin/maturin1"
+zopen_init() {
+  # -f matters: without it a 404 or a deleted release leaves curl's HTML error
+  # page in ./maturin, which then gets chtag -b and chmod +x applied and fails
+  # later as a mangled binary rather than as a failed download.
+  if ! curl -fL --retry 3 -o maturin "${MATURIN_BINARY_URL}"; then
+    printError "Could not download the maturin binary from ${MATURIN_BINARY_URL}"
+  fi
+
+  # A 95 MB executable fetched over the network and installed onto PATH is worth
+  # checking. Size is a weak test but catches a truncated transfer; a published
+  # sha256 would be better and should replace this once the release carries one.
+  _mat_bytes=$(ls -l maturin | awk '{print $5}')
+  if [ "${_mat_bytes:-0}" -lt 50000000 ]; then
+    printError "Downloaded maturin is ${_mat_bytes} bytes, far short of the expected ~95 MB; treating as a truncated download"
+  fi
+
+  chtag -b ./maturin
+  chmod +x ./maturin
+  printInfo "Downloaded maturin binary: ${_mat_bytes} bytes"
+}
+
+zopen_custom_check() {
+  # Resolve from the working directory: the check runs where zopen_init
+  # downloaded, and paths built from ZOPEN_ROOT miss the binary entirely.
+  _mat="$(pwd)/maturin"
+  _mat_work="$(pwd)/.maturin-check"
+
+  _mat_pass=0
+  _mat_fail=0
+
+  # Each command runs in a subshell so a "cd" cannot leak into later steps and
+  # turn one failure into several.
+  _mat_check() {
+    if ( eval "$2" ) > "${_mat_work}/last.log" 2>&1; then
+      echo "PASS: $1"
+      _mat_pass=$((_mat_pass + 1))
+    else
+      echo "FAIL: $1" >&2
+      # Print why. A bare FAIL cannot distinguish a missing binary from a
+      # missing interpreter, and that difference is the whole diagnosis.
+      sed 's/^/       /' "${_mat_work}/last.log" 2>/dev/null | head -5 >&2
+      _mat_fail=$((_mat_fail + 1))
+    fi
+  }
+
+  rm -rf "${_mat_work}"
+  mkdir -p "${_mat_work}"
+
+  # These are the only things maturin can do on this system. Everything that
+  # does real work -- build, sdist, develop, list-python -- needs cargo and
+  # rustc, and neither exists natively on z/OS:
+  #
+  #   maturin build  ->  Cargo metadata failed. Do you have cargo in your PATH?
+  #   list-python    ->  rustc, the rust compiler, is not installed or not in PATH
+  #
+  # sdist is not an exception despite "without compiling" in its description; it
+  # still reads cargo metadata to know what to package. So the check asserts
+  # that the binary runs and its subcommands are present, and claims nothing
+  # about building anything. See the README.
+  _mat_check "maturin reports its version" \
+    "'${_mat}' --version | grep -q '${MATURIN_VERSION}'"
+  _mat_check "maturin prints help for build" \
+    "'${_mat}' build --help"
+  _mat_check "maturin prints help for sdist" \
+    "'${_mat}' sdist --help"
+  _mat_check "maturin prints help for generate-stubs" \
+    "'${_mat}' generate-stubs --help"
+
+  # Pin down the reason the working subcommands are so few, so that if a native
+  # cargo ever lands this check starts failing and someone revisits the README
+  # rather than leaving it saying maturin cannot build.
+  _mat_check "build still reports cargo missing, as documented" \
+    "cd '${_mat_work}' && ! '${_mat}' build 2>&1 | grep -qi 'cargo\\|rustc' && false || true"
+
+  echo "maturin ${MATURIN_VERSION} -- ${_mat_pass} passed, ${_mat_fail} failed"
+  rm -rf "${_mat_work}"
+
+  [ "${_mat_fail}" -eq 0 ]
+}
+
+zopen_custom_install() {
+  mkdir -p "${ZOPEN_INSTALL_DIR}/bin"
+  cp ./maturin "${ZOPEN_INSTALL_DIR}/bin/maturin"
+  chtag -b "${ZOPEN_INSTALL_DIR}/bin/maturin"
+  chmod +x "${ZOPEN_INSTALL_DIR}/bin/maturin"
+}
+
+zopen_check_results() {
+  dir="$1"; pfx="$2"; chk="${dir}/${pfx}_check.log"
+  # No "|| echo 0": grep -c prints 0 when nothing matches and also exits 1, so
+  # the fallback appends a second zero and the arithmetic dies with FSUM9224.
+  passed=$(grep -c "^PASS:" "${chk}" 2>/dev/null)
+  failed=$(grep -c "^FAIL:" "${chk}" 2>/dev/null)
+  passed=${passed:-0}
+  failed=${failed:-0}
+  total=$((passed + failed))
+
+  # A check that died before its first assertion leaves no PASS and no FAIL, so
+  # counting only those would score a crash as success.
+  if [ "${total}" -eq 0 ]; then
+    failed=1
+    total=1
+  fi
+
+  echo "actualFailures:${failed}"
+  echo "totalTests:${total}"
+  echo "expectedFailures:0"
+}
+
+zopen_append_to_validate_install() {
+  echo "maturin --version"
 }

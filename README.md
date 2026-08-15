@@ -7,12 +7,36 @@ as PEP-517 compliant wheels.
 
 ## Status
 
-✅ **Working on z/OS** — binary tested on z/OS 2.5 (OS/390 UNIX)
+The binary runs on z/OS 2.5 and reports its version:
 
 ```
 $ maturin --version
 maturin 1.14.1
 ```
+
+**It cannot build anything yet.** Every subcommand that does real work needs
+cargo and rustc, and neither exists natively on z/OS — the Rust toolchain for
+this platform is a cross-compiler that runs on Linux:
+
+```
+$ maturin build
+💥 maturin failed
+  Caused by: Cargo metadata failed. Do you have cargo in your PATH?
+
+$ maturin list-python
+💥 maturin failed
+  Caused by: rustc, the rust compiler, is not installed or not in PATH.
+```
+
+`sdist` is not an exception despite "without compiling" in its description; it
+still reads cargo metadata to decide what to package.
+
+So what works today is `--version` and `--help` for each subcommand. The port is
+worth having as the place this lands once a native cargo exists, and so the
+binary is already packaged and tested — but installing it does not yet let you
+build a Rust-backed wheel on z/OS. Until then, wheels for this platform are
+cross-compiled on Linux, which is how pydantic-core, rpds-py and uv itself are
+produced.
 
 ## Installation
 
